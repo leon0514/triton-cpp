@@ -6,9 +6,34 @@
 - `http`
 - `shm`（基于 HTTP 的系统共享内存）
 
-以下所有脚本均设计为在 `workspace` 目录下执行。
+## 目录结构
 
-## 用法
+```
+workspace/triton_client/
+├── __init__.py        # 导出 TritonClient、TritonClientError
+├── client.py          # 核心实现
+├── example.py         # 三种协议调用示例
+├── test_client.py     # 单元测试 + 集成测试
+├── benchmark.py       # 时间/性能测试
+└── README.md
+```
+
+## 依赖
+
+```bash
+pip install numpy pillow tritonclient[all]
+```
+
+或仅安装需要的协议：
+
+```bash
+pip install tritonclient[grpc]
+pip install tritonclient[http]
+```
+
+## 基本用法
+
+以下脚本均在 `workspace` 目录下执行。
 
 ```python
 import numpy as np
@@ -61,32 +86,89 @@ with TritonClient("localhost:48000", protocol="shm") as client:
     )
 ```
 
-## 说明
+## API 说明
 
-- `inputs` 是 `dict[str, np.ndarray]`，key 为输入张量名，value 为 numpy 数组。
-- `outputs` 是需要返回的输出张量名列表。
-- `shm` 模式必须提供 `output_specs`，因为输出共享内存缓冲区需要在推理前分配好。
-- 所有协议均返回普通的 `numpy.ndarray`。SHM 模式下会在返回前把数据从共享内存拷贝出来，因此关闭 client 后仍可安全使用结果。
-- `get_model_metadata(model_name)` 可获取简化后的模型元数据，三种协议均支持。
+### `TritonClient(url, protocol="http", verbose=False)`
 
-## 示例、测试与性能对比
+- `url`：服务端地址，例如 `localhost:48001`。
+- `protocol`：协议类型，可选 `"grpc"`、`"http"`、`"shm"`。
+- `verbose`：是否打印底层请求日志。
+
+支持上下文管理器，`with` 块结束时会自动释放共享内存并关闭连接。
+
+### `infer(model_name, inputs, outputs, output_specs=None)`
+
+执行推理并返回 `dict[str, np.ndarray]`。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `model_name` | `str` | 模型或 ensemble 名称 |
+| `inputs` | `dict[str, np.ndarray]` | 输入张量 |
+| `outputs` | `list[str]` | 需要返回的输出张量名 |
+| `output_specs` | `dict[str, (shape, dtype)]` | **SHM 模式必填**，预分配输出缓冲区 |
+
+`output_specs` 示例：
+
+```python
+{
+    "num_dets": ([1, 1], "int32"),
+    "detection_boxes": ([1, 300, 4], "float32"),
+}
+```
+
+### 其他方法
+
+- `is_server_ready()` / `is_server_live()`：服务端状态。
+- `is_model_ready(model_name)`：模型状态。
+- `get_model_metadata(model_name)`：获取简化后的模型元数据。
+
+## 运行示例
 
 在 `workspace` 目录下执行：
 
 ```bash
-# 三种协议示例
 python3 triton_client/example.py --protocol grpc
 python3 triton_client/example.py --protocol http
 python3 triton_client/example.py --protocol shm
+```
 
+## 测试
+
+```bash
 # 单元测试（无需 Triton 服务）
 python3 triton_client/test_client.py
 
 # 集成测试（需要本地 Triton 服务正在运行）
 python3 triton_client/test_client.py --integration
+```
 
-# 时间/性能测试（需要本地 Triton 服务正在运行）
+## 性能测试
+
+```bash
 python3 triton_client/benchmark.py --protocol grpc --count 100 --warmup 10
 python3 triton_client/benchmark.py --protocol http --count 100 --warmup 10
 python3 triton_client/benchmark.py --protocol shm --count 100 --warmup 10
 ```
+
+输出示例：
+
+```
+========== Benchmark Results ==========
+Protocol:       shm
+Requests:       100
+Total time:     1.864 s
+Throughput:     53.65 req/s
+Mean latency:   18.64 ms
+Median latency: 18.52 ms
+P90 latency:    19.34 ms
+P95 latency:    19.75 ms
+P99 latency:    21.03 ms
+Min latency:    17.89 ms
+Max latency:    21.56 ms
+```
+
+## 注意事项
+
+- `shm` 模式必须提供 `output_specs`，因为输出共享内存缓冲区需要在推理前分配好。
+- 所有协议均返回普通的 `numpy.ndarray`。SHM 模式下会在返回前把数据从共享内存拷贝出来，因此关闭 client 后仍可安全使用结果。
+- 多输入场景在 gRPC / HTTP 下完全支持；SHM 模式下同样支持多个输入张量，每个输入会独立创建共享内存区域。
