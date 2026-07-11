@@ -11,15 +11,14 @@
 cd triton-cpp
 
 # 启动 SDK 容器并挂载当前目录到 /workspace
-# 注意：必须是 -py3-sdk 结尾的 SDK 镜像，而不是 -py3 运行时镜像
 docker run --rm -it --gpus all \
     -v $(pwd):/workspace \
     -w /workspace \
-    nvcr.io/nvidia/tritonserver:25.01-py3-sdk \
+    nvcr.io/nvidia/tritonserver:25.01-py3 \
     bash build.sh
 ```
 
-构建产物位于 `build/libtriton_preprocess.so`。
+构建产物位于 `build/libtriton_preprocess.so`、`build/libtriton_yolo11_postprocess.so`、`build/libtriton_yolo11_pose_postprocess.so`、`build/libtriton_yolov5_postprocess.so`，分别对应四个后端。
 
 ## 部署
 

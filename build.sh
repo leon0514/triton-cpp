@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build script for Triton preprocess backend
+# Build script for Triton custom backends (preprocess, yolo11_postprocess, yolo11_pose_postprocess, yolov5_postprocess)
 # Recommended to run inside nvcr.io/nvidia/tritonserver:25.01-py3
 
 set -e
@@ -72,5 +72,6 @@ cmake .. \
 
 make -j"$(nproc)"
 
-echo "Build complete: ${BUILD_DIR}/libtriton_preprocess.so"
-echo "Copy to model repository: <model>/1/libtriton_preprocess.so or <backend_dir>/preprocess/libtriton_preprocess.so"
+echo "Build complete. Shared libraries in ${BUILD_DIR}:"
+ls -1 ${BUILD_DIR}/libtriton_*.so 2>/dev/null || true
+echo "Copy the required .so to <model>/1/libtriton_<backend>.so or <backend_dir>/<backend>/libtriton_<backend>.so"
