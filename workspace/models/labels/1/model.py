@@ -27,7 +27,7 @@ class TritonPythonModel:
                 path = os.path.join(self.names_dir, fname)
                 with open(path, "r", encoding="utf-8") as f:
                     self.labels_cache[model_name] = [
-                        line.strip() for line in f if line.strip()
+                        line.strip() for line in f
                     ]
 
     def execute(self, requests):

@@ -1,0 +1,68 @@
+name: "rfdetr_postprocess"
+backend: "rfdetr_postprocess"
+max_batch_size: 16
+
+# RF-DETR ONNX 输出后处理：
+#   - dets:   [batch, 300, 4]  归一化 cxcywh 框
+#   - labels: [batch, 300, 91] 类别 logits（最后一维为背景，前 90 维对应 COCO ID 1~90）
+
+input [
+  {
+    name: "dets"
+    data_type: TYPE_FP32
+    dims: [300, 4]
+  },
+  {
+    name: "labels"
+    data_type: TYPE_FP32
+    dims: [300, 91]
+  }
+]
+
+output [
+  {
+    name: "num_dets"
+    data_type: TYPE_INT32
+    dims: [1]
+  },
+  {
+    name: "detection_boxes"
+    data_type: TYPE_FP32
+    dims: [300, 4]
+  },
+  {
+    name: "detection_scores"
+    data_type: TYPE_FP32
+    dims: [300]
+  },
+  {
+    name: "detection_classes"
+    data_type: TYPE_INT32
+    dims: [300]
+  }
+]
+
+parameters: {
+  key: "confidence_threshold"
+  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "max_detections"
+  value: { string_value: "300" }
+}
+parameters: {
+  key: "input_width"
+  value: { string_value: "512" }
+}
+parameters: {
+  key: "input_height"
+  value: { string_value: "512" }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]

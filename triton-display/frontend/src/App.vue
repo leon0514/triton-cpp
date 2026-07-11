@@ -99,7 +99,7 @@
           :show-scores="showScores"
           :show-pose="showPose"
           :show-seg="showSeg"
-          :class-names="classNames"
+          :class-names="displayClassNames"
         />
       </div>
 
@@ -137,6 +137,24 @@ const showSeg = ref(true)
 const selectedLabels = ref([])
 const classNames = ref([])
 
+// RF-DETR 系列模型输出的是 COCO 1-based ID，标签数组是 0-based，因此需要 -1 偏移
+function labelIndex(classId) {
+  return selectedModel.value.startsWith('rfdetr') ? classId - 1 : classId
+}
+
+function getLabelName(classId) {
+  const idx = labelIndex(classId)
+  return classNames.value[idx] || ''
+}
+
+// 为 1-based ID 的模型在标签数组前补一个空位，使 CanvasViewer 可直接用 class_id 索引
+const displayClassNames = computed(() => {
+  if (selectedModel.value.startsWith('rfdetr')) {
+    return ['', ...classNames.value]
+  }
+  return classNames.value
+})
+
 const modelType = computed(() => {
   const name = selectedModel.value.toLowerCase()
   if (name.includes('obb')) return 'obb'
@@ -146,13 +164,16 @@ const modelType = computed(() => {
 })
 
 const availableLabels = computed(() => {
-  const names = classNames.value
   const ids = new Set(result.value?.detections?.map((d) => d.class_id) || [])
   return Array.from(ids)
     .sort((a, b) => a - b)
+    .filter((id) => {
+      const name = getLabelName(id)
+      return name && name.trim() !== ''
+    })
     .map((id) => ({
       id,
-      name: names[id] || `class_${id}`,
+      name: getLabelName(id),
       color: getColor(id),
     }))
 })
@@ -161,6 +182,8 @@ const filteredDetections = computed(() => {
   if (!result.value) return []
   return result.value.detections.filter((d) => {
     if (d.score < confThreshold.value) return false
+    const name = getLabelName(d.class_id)
+    if (!name || name.trim() === '') return false
     if (selectedLabels.value.length > 0 && !selectedLabels.value.includes(d.class_id))
       return false
     return true

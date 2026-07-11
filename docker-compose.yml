@@ -15,10 +15,13 @@
 #
 # The backend shared libraries are embedded in the model repository:
 #   /models/preprocess/1/libtriton_preprocess.so
+#   /models/preprocess_rfdetr/1/libtriton_preprocess.so
 #   /models/yolo11_postprocess/1/libtriton_yolo11_postprocess.so
 #   /models/yolo11_pose_postprocess/1/libtriton_yolo11_pose_postprocess.so
 #   /models/yolo11_obb_postprocess/1/libtriton_yolo11_obb_postprocess.so
 #   /models/yolov5_postprocess/1/libtriton_yolov5_postprocess.so
+#   /models/yolo26_postprocess/1/libtriton_yolo26_postprocess.so
+#   /models/rfdetr_postprocess/1/libtriton_rfdetr_postprocess.so
 
 services:
   triton:
@@ -36,6 +39,7 @@ services:
       - tritonserver
       - --model-repository=/models
       - --log-verbose=1
+      - --exit-on-error=false
     deploy:
       resources:
         reservations:

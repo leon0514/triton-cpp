@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build script for Triton custom backends (preprocess, yolo11_postprocess, yolo11_pose_postprocess, yolov5_postprocess)
+# Build script for Triton custom backends (preprocess, yolo11_postprocess, yolo11_pose_postprocess, yolo11_obb_postprocess, yolov5_postprocess, yolo26_postprocess, rfdetr_postprocess)
 # Recommended to run inside nvcr.io/nvidia/tritonserver:25.01-py3
 
 set -e
