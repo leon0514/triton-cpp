@@ -148,6 +148,30 @@ target_compile_options(triton_yolo11_pose_postprocess PRIVATE
 )
 target_link_libraries(triton_yolo11_pose_postprocess CUDA::cudart Threads::Threads)
 
+# -------------------- YOLO11 OBB postprocess backend --------------------
+set(YOLO11_OBB_POSTPROCESS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo11_obb_postprocess/yolo11_obb_postprocess_kernel.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo11_obb_postprocess/yolo11_obb_postprocess_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo11_obb_postprocess/triton_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo11_obb_postprocess/triton_backend.cpp
+)
+
+add_library(triton_yolo11_obb_postprocess SHARED ${YOLO11_OBB_POSTPROCESS_SOURCES} ${COMMON_SOURCES})
+set_target_properties(triton_yolo11_obb_postprocess PROPERTIES
+    OUTPUT_NAME "triton_yolo11_obb_postprocess"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    POSITION_INDEPENDENT_CODE ON
+)
+if(CMAKE_CUDA_ARCHITECTURES)
+    set_property(TARGET triton_yolo11_obb_postprocess PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
+endif()
+target_compile_options(triton_yolo11_obb_postprocess PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+)
+target_link_libraries(triton_yolo11_obb_postprocess CUDA::cudart Threads::Threads)
+
 # -------------------- YOLOV5 postprocess backend --------------------
 set(YOLOV5_POSTPROCESS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/yolov5_postprocess/yolov5_postprocess_kernel.cu
@@ -189,16 +213,18 @@ if(TRITON_DIR)
         target_link_libraries(triton_preprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_yolo11_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_yolo11_pose_postprocess ${TRITON_BACKEND_API_LIB})
+        target_link_libraries(triton_yolo11_obb_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_yolov5_postprocess ${TRITON_BACKEND_API_LIB})
     endif()
     if(TRITON_SERVER_API_LIB)
         target_link_libraries(triton_preprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_yolo11_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_yolo11_pose_postprocess ${TRITON_SERVER_API_LIB})
+        target_link_libraries(triton_yolo11_obb_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_yolov5_postprocess ${TRITON_SERVER_API_LIB})
     endif()
 endif()
 
-install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolov5_postprocess
+install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolov5_postprocess
     LIBRARY DESTINATION lib
 )

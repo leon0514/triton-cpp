@@ -18,7 +18,7 @@ docker run --rm -it --gpus all \
     bash build.sh
 ```
 
-构建产物位于 `build/libtriton_preprocess.so`、`build/libtriton_yolo11_postprocess.so`、`build/libtriton_yolo11_pose_postprocess.so`、`build/libtriton_yolov5_postprocess.so`，分别对应四个后端。
+构建产物位于 `build/libtriton_preprocess.so`、`build/libtriton_yolo11_postprocess.so`、`build/libtriton_yolo11_pose_postprocess.so`、`build/libtriton_yolo11_obb_postprocess.so`、`build/libtriton_yolov5_postprocess.so`，分别对应五个后端。
 
 ## 部署
 
@@ -34,6 +34,11 @@ cp -r workspace/models/preprocess <model_repository>/
 mkdir -p <model_repository>/preprocess/1
 cp build/libtriton_preprocess.so <model_repository>/preprocess/1/
 cp workspace/models/preprocess/config.pbtxt <model_repository>/preprocess/
+
+# YOLO11-OBB 后处理示例
+mkdir -p <model_repository>/yolo11_obb_postprocess/1
+cp build/libtriton_yolo11_obb_postprocess.so <model_repository>/yolo11_obb_postprocess/1/
+cp workspace/models/yolo11_obb_postprocess/config.pbtxt <model_repository>/yolo11_obb_postprocess/
 ```
 
 启动 Triton：
@@ -60,6 +65,16 @@ tritonserver --model-repository <model_repository>
 | `channel_type` | string | `none` / `swap_rb`（输入 BGR，输出 RGB） | `swap_rb` |
 | `fill_value` | float[3] | letterbox 填充色 BGR | `[114.0, 114.0, 114.0]` |
 | `output_transform` | bool | 是否输出 d2i 变换矩阵 | `true` |
+
+### YOLO11-OBB 后处理参数
+
+`workspace/models/yolo11_obb_postprocess/config.pbtxt` 参数与 YOLO11 检测后处理类似，区别如下：
+
+- `num_classes`：DOTA 数据集默认为 `15`。
+- `output_format`：`channel_first` 对应 `[20, 8400]`（4 box + 1 angle + 15 classes）。
+- `score_activation`：原版 Ultralytics ONNX 导出时类别分支已经过 Sigmoid，需设置为 `none`。
+- 输出 `detection_boxes` 维度为 `[300, 5]`，格式 `[cx, cy, w, h, angle]`（angle 为弧度）。
+- NMS 使用基于 Sutherland-Hodgman 多边形裁剪的精确旋转 IoU（Skew IoU），而非外接矩形近似，减少倾斜/密集目标漏检。
 
 ## 输入输出
 
