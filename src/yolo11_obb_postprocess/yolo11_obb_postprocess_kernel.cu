@@ -189,6 +189,34 @@ struct CandidateCompare
 };
 
 // ------------------------------------------------------------------
+// 初始化输出缓冲区：未使用位置清零，避免客户端读到脏数据
+// ------------------------------------------------------------------
+__global__ void init_output_kernel(
+    int total_images,
+    int max_detections,
+    int *d_num_dets,
+    float *d_boxes,
+    float *d_scores,
+    int *d_classes)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = total_images * max_detections;
+    if (idx >= total)
+        return;
+
+    d_boxes[idx * 5 + 0] = 0.0f;
+    d_boxes[idx * 5 + 1] = 0.0f;
+    d_boxes[idx * 5 + 2] = 0.0f;
+    d_boxes[idx * 5 + 3] = 0.0f;
+    d_boxes[idx * 5 + 4] = 0.0f;
+    d_scores[idx]        = 0.0f;
+    d_classes[idx]       = -1;
+
+    if (idx < total_images)
+        d_num_dets[idx] = 0;
+}
+
+// ------------------------------------------------------------------
 // NMS kernel：每图一个线程，候选框已按 score 降序
 // ------------------------------------------------------------------
 __global__ void nms_kernel(
@@ -304,7 +332,14 @@ void yolo11_obb_postprocess_gpu(
     thrust::sort(thrust::cuda::par.on(stream), cand_ptr,
                  cand_ptr + total_images * max_candidates, CandidateCompare());
 
-    // 5. NMS
+    // 5. 清零输出缓冲区
+    int out_total = total_images * max_detections;
+    int out_grid  = (out_total + block_size - 1) / block_size;
+    out_grid      = min(out_grid, 65536);
+    init_output_kernel<<<out_grid, block_size, 0, stream>>>(
+        total_images, max_detections, d_num_dets, d_boxes, d_scores, d_classes);
+
+    // 6. NMS
     int nms_grid = (total_images + block_size - 1) / block_size;
     nms_grid     = min(nms_grid, 65536);
     nms_kernel<<<nms_grid, block_size, 0, stream>>>(
