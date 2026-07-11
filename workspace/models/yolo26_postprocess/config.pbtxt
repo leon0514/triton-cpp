@@ -1,0 +1,55 @@
+name: "yolo26_postprocess"
+backend: "yolo26_postprocess"
+max_batch_size: 16
+
+# YOLO26 one-to-one (NMS-free) 检测头输出：
+#   [batch, 300, 6]
+# 6 列含义: [x1, y1, x2, y2, score, class]
+
+input [
+  {
+    name: "model_output"
+    data_type: TYPE_FP32
+    dims: [300, 6]
+  }
+]
+
+output [
+  {
+    name: "num_dets"
+    data_type: TYPE_INT32
+    dims: [1]
+  },
+  {
+    name: "detection_boxes"
+    data_type: TYPE_FP32
+    dims: [300, 4]
+  },
+  {
+    name: "detection_scores"
+    data_type: TYPE_FP32
+    dims: [300]
+  },
+  {
+    name: "detection_classes"
+    data_type: TYPE_INT32
+    dims: [300]
+  }
+]
+
+parameters: {
+  key: "confidence_threshold"
+  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "max_detections"
+  value: { string_value: "300" }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]
