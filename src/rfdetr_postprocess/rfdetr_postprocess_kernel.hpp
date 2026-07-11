@@ -33,9 +33,10 @@ struct Candidate
  * 处理:
  *   - 去掉 labels 最后一维背景
  *   - 对前 90 维做 sigmoid，取最大值作为置信度/类别
- *   - 跳过 COCO 空 ID（12, 26, 29, 30, 45, 66, 68, 69, 71, 83）
+ *   - 跳过配置中的空 COCO ID（通过 d_coco_id_to_index 映射）
  *   - 将归一化 cxcywh 转换为模型输入坐标系下的 xyxy
  *   - 按置信度排序，保留前 max_detections 个
+ *   - 输出 class_id 为 names 文件中的 0-based 索引
  *
  * @param dets           dets 数据指针（device）
  * @param labels         labels 数据指针（device）
@@ -51,8 +52,9 @@ struct Candidate
  * @param d_num_dets     每张图最终检测数（device int[total_images]，输出）
  * @param d_boxes        检测框输出缓冲区（device float[total_images * max_detections * 4]）
  * @param d_scores       分数输出缓冲区（device float[total_images * max_detections]）
- * @param d_classes      类别输出缓冲区（device int[total_images * max_detections]）
- * @param stream         CUDA 流
+ * @param d_classes           类别输出缓冲区（device int[total_images * max_detections]）
+ * @param d_coco_id_to_index  COCO ID -> names 文件索引 映射，-1 表示跳过（device int[91]）
+ * @param stream              CUDA 流
  */
 void rfdetr_postprocess_gpu(
     const void *dets,
@@ -70,6 +72,7 @@ void rfdetr_postprocess_gpu(
     float *d_boxes,
     float *d_scores,
     int *d_classes,
+    const int *d_coco_id_to_index,
     cudaStream_t stream);
 
 } // namespace rfdetr_postprocess

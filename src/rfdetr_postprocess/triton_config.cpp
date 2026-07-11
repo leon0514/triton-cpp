@@ -7,6 +7,7 @@
 #include "common/json.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -42,6 +43,36 @@ static std::string GetStringParameter(const nlohmann::json &parameters, const st
     }
 
     return "";
+}
+
+static std::vector<int> ParseIntArray(const std::string &s)
+{
+    std::vector<int> result;
+    if (s.empty())
+        return result;
+
+    // 支持 "[1, 2, 3]" 或 "1,2,3" 或 "[1,2,3]"
+    std::string cleaned;
+    for (char c : s)
+    {
+        if (std::isdigit(c) || c == '-' || c == ',' || c == ' ')
+            cleaned.push_back(c);
+    }
+
+    std::stringstream ss(cleaned);
+    std::string token;
+    while (std::getline(ss, token, ','))
+    {
+        std::string trimmed;
+        for (char c : token)
+        {
+            if (!std::isspace(static_cast<unsigned char>(c)))
+                trimmed.push_back(c);
+        }
+        if (!trimmed.empty())
+            result.push_back(std::stoi(trimmed));
+    }
+    return result;
 }
 
 TRITONSERVER_Error *ParseRfDetrPostprocessConfig(
@@ -96,6 +127,12 @@ TRITONSERVER_Error *ParseRfDetrPostprocessConfig(
         if (!input_height.empty())
         {
             config.input_height = std::stof(input_height);
+        }
+
+        std::string skip_ids = GetStringParameter(parameters, "skip_coco_ids");
+        if (!skip_ids.empty())
+        {
+            config.skip_coco_ids = ParseIntArray(skip_ids);
         }
 
         if (config.confidence_threshold < 0.0f || config.confidence_threshold > 1.0f)

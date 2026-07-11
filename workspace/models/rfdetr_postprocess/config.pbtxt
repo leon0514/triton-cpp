@@ -58,6 +58,10 @@ parameters: {
   key: "input_height"
   value: { string_value: "512" }
 }
+parameters: {
+  key: "skip_coco_ids"
+  value: { string_value: "[12, 26, 29, 30, 45, 66, 68, 69, 71, 83]" }
+}
 
 instance_group [
   {

@@ -19,8 +19,8 @@ namespace rfdetr_postprocess
 // RF-DETR ONNX 输出 labels 维度为 91：
 //   - dim 0 为背景/无目标槽位
 //   - dim 1..90 对应官方 COCO ID 1..90
-// 因此后处理扫描 dim 1..90，输出 class_id 直接为 best_idx（即 COCO 1-based ID）。
-// 10 个空 COCO ID（12,26,29,30,45,66,68,69,71,83）保留输出，由前端/显示层过滤。
+// COCO 90 个 ID 中有 10 个空 ID，由 config.pbtxt 中的 skip_coco_ids 指定。
+// 后处理跳过空类别，输出 class_id 为 names 文件中的 0-based 索引。
 
 __device__ __forceinline__ float sigmoid(float x)
 {
@@ -51,6 +51,7 @@ __global__ void filter_kernel(
     float input_width,
     float input_height,
     float conf_thresh,
+    const int *coco_id_to_index,
     Candidate *candidates,
     int *counts)
 {
@@ -69,25 +70,29 @@ __global__ void filter_kernel(
     float w  = static_cast<float>(dets[det_offset + 2]);
     float h  = static_cast<float>(dets[det_offset + 3]);
 
-    // labels 读取: [batch, num_queries, 91]，最后一维为背景
+    // labels 读取: [batch, num_queries, 91]，dim 0 为背景，dim 1..90 为 COCO ID 1~90
     int label_offset = (batch_idx * num_queries + query_idx) * 91;
 
-    // 对 dim 1..90（COCO ID 1~90）做 sigmoid，取最大值与索引
-    float best_score = 0.0f;
-    int best_idx     = -1;
+    // 对有效 COCO ID 做 sigmoid，取最大值与索引
+    float best_score  = 0.0f;
+    int best_class_id = -1;  // names 文件中的 0-based 索引
     #pragma unroll 4
-    for (int c = 1; c <= 90; ++c)
+    for (int coco_id = 1; coco_id <= 90; ++coco_id)
     {
-        float logit = static_cast<float>(labels[label_offset + c]);
+        int class_idx = coco_id_to_index[coco_id];
+        if (class_idx < 0)
+            continue;
+
+        float logit = static_cast<float>(labels[label_offset + coco_id]);
         float score = sigmoid(logit);
         if (score > best_score)
         {
-            best_score = score;
-            best_idx   = c;
+            best_score  = score;
+            best_class_id = class_idx;
         }
     }
 
-    if (best_idx < 1 || best_idx > 90)
+    if (best_class_id < 0)
         return;
 
     if (best_score < conf_thresh)
@@ -109,8 +114,8 @@ __global__ void filter_kernel(
     cand.x2       = x2;
     cand.y2       = y2;
     cand.score    = best_score;
-    // 输出 COCO 1-based ID（与模型槽位一一对应）
-    cand.class_id = best_idx;
+    // 输出 names 文件中的 0-based 索引
+    cand.class_id = best_class_id;
     cand.batch_idx = batch_idx;
 
     candidates[batch_idx * num_queries + pos] = cand;
@@ -201,6 +206,7 @@ void rfdetr_postprocess_gpu(
     float *d_boxes,
     float *d_scores,
     int *d_classes,
+    const int *d_coco_id_to_index,
     cudaStream_t stream)
 {
     if (total_images <= 0 || num_queries <= 0)
@@ -227,6 +233,7 @@ void rfdetr_postprocess_gpu(
             total_images, num_queries,
             input_width, input_height,
             conf_thresh,
+            d_coco_id_to_index,
             d_candidates, d_counts);
     }
     else
@@ -237,6 +244,7 @@ void rfdetr_postprocess_gpu(
             total_images, num_queries,
             input_width, input_height,
             conf_thresh,
+            d_coco_id_to_index,
             d_candidates, d_counts);
     }
     checkRuntime(cudaPeekAtLastError());

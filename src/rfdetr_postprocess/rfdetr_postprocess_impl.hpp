@@ -25,6 +25,8 @@ struct RfDetrPostprocessConfig
     int max_batch_size         = 16;
     float input_width          = 640.0f;
     float input_height         = 640.0f;
+    // 需要跳过的 COCO ID（空类别），默认 COCO 90 类中的 10 个空 ID
+    std::vector<int> skip_coco_ids = {12, 26, 29, 30, 45, 66, 68, 69, 71, 83};
 };
 
 class RfDetrPostprocess
@@ -51,6 +53,7 @@ class RfDetrPostprocess
 
     inline const RfDetrPostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }
+    inline const int *coco_id_to_index_gpu() const { return coco_id_to_index_workspace_.gpu(); }
 
     inline int *num_detections_gpu() const { return num_detections_workspace_.gpu(); }
     inline float *boxes_gpu() const { return boxes_workspace_.gpu(); }
@@ -62,6 +65,8 @@ class RfDetrPostprocess
 
     tensor::Memory<int> counts_memory_;
     tensor::Memory<rfdetr_postprocess::Candidate> candidates_memory_;
+
+    tensor::Memory<int> coco_id_to_index_workspace_;
 
     tensor::Memory<int> num_detections_workspace_;
     tensor::Memory<float> boxes_workspace_;

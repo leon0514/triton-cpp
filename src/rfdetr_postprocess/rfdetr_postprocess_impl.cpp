@@ -4,6 +4,9 @@
  */
 
 #include "rfdetr_postprocess/rfdetr_postprocess_impl.hpp"
+#include "common/check.hpp"
+
+#include <algorithm>
 #include <cstdio>
 
 namespace rfdetr_postprocess
@@ -14,6 +17,26 @@ RfDetrPostprocess::RfDetrPostprocess(const RfDetrPostprocessConfig &config)
 {
     // 根据 max_batch_size 预分配输出 workspace，避免推理热路径上的同步显存申请。
     const int max_batch = config_.max_batch_size;
+
+    // 构造 COCO ID -> names 文件索引 的映射表，-1 表示跳过
+    int host_coco_id_to_index[91];
+    for (int i = 0; i <= 90; ++i)
+        host_coco_id_to_index[i] = -1;
+
+    int index = 0;
+    for (int coco_id = 1; coco_id <= 90; ++coco_id)
+    {
+        if (std::find(config_.skip_coco_ids.begin(), config_.skip_coco_ids.end(), coco_id) !=
+            config_.skip_coco_ids.end())
+        {
+            continue;
+        }
+        host_coco_id_to_index[coco_id] = index++;
+    }
+
+    coco_id_to_index_workspace_.gpu(91);
+    checkRuntime(cudaMemcpy(coco_id_to_index_workspace_.gpu(), host_coco_id_to_index,
+                            91 * sizeof(int), cudaMemcpyHostToDevice));
 
     num_detections_workspace_.gpu(max_batch);
     boxes_workspace_.gpu(max_batch * config_.max_detections * 4);
@@ -60,6 +83,7 @@ void RfDetrPostprocess::forward(
         d_boxes,
         d_scores,
         d_classes,
+        coco_id_to_index_workspace_.gpu(),
         stream);
 }
 

@@ -99,7 +99,7 @@
           :show-scores="showScores"
           :show-pose="showPose"
           :show-seg="showSeg"
-          :class-names="displayClassNames"
+          :class-names="classNames"
         />
       </div>
 
@@ -137,23 +137,9 @@ const showSeg = ref(true)
 const selectedLabels = ref([])
 const classNames = ref([])
 
-// RF-DETR 系列模型输出的是 COCO 1-based ID，标签数组是 0-based，因此需要 -1 偏移
-function labelIndex(classId) {
-  return selectedModel.value.startsWith('rfdetr') ? classId - 1 : classId
-}
-
 function getLabelName(classId) {
-  const idx = labelIndex(classId)
-  return classNames.value[idx] || ''
+  return classNames.value[classId] || ''
 }
-
-// 为 1-based ID 的模型在标签数组前补一个空位，使 CanvasViewer 可直接用 class_id 索引
-const displayClassNames = computed(() => {
-  if (selectedModel.value.startsWith('rfdetr')) {
-    return ['', ...classNames.value]
-  }
-  return classNames.value
-})
 
 const modelType = computed(() => {
   const name = selectedModel.value.toLowerCase()
