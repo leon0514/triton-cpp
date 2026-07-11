@@ -78,3 +78,7 @@ tests/output_*.png
 
 # Shared memory segment files (if any)
 *.shm
+
+# fronted
+triton-display/frontend/dist/
+triton-display/frontend/node_modules/

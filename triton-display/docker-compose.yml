@@ -1,0 +1,17 @@
+services:
+  triton-display:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: triton-display
+    ports:
+      - "8088:3000"
+    environment:
+      - TRITON_HTTP_URL=triton-backends:8000
+    networks:
+      - triton-cpp_default
+    restart: unless-stopped
+
+networks:
+  triton-cpp_default:
+    external: true
