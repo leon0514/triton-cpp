@@ -19,6 +19,7 @@
 #   /models/yolo11_postprocess/1/libtriton_yolo11_postprocess.so
 #   /models/yolo11_pose_postprocess/1/libtriton_yolo11_pose_postprocess.so
 #   /models/yolo11_obb_postprocess/1/libtriton_yolo11_obb_postprocess.so
+#   /models/yolo11_seg_postprocess/1/libtriton_yolo11_seg_postprocess.so
 #   /models/yolov5_postprocess/1/libtriton_yolov5_postprocess.so
 #   /models/yolo26_postprocess/1/libtriton_yolo26_postprocess.so
 #   /models/rfdetr_postprocess/1/libtriton_rfdetr_postprocess.so
@@ -40,6 +41,7 @@ services:
       - --model-repository=/models
       - --log-verbose=1
       - --exit-on-error=false
+      - --strict-readiness=false
     deploy:
       resources:
         reservations:

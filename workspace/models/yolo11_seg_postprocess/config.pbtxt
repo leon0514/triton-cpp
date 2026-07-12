@@ -1,0 +1,84 @@
+name: "yolo11_seg_postprocess"
+backend: "yolo11_seg_postprocess"
+max_batch_size: 16
+input [
+  {
+    name: "model_output"
+    data_type: TYPE_FP32
+    dims: [116, 8400]
+  }
+]
+input [
+  {
+    name: "mask_protos"
+    data_type: TYPE_FP32
+    dims: [32, 160, 160]
+  }
+]
+output [
+  {
+    name: "num_dets"
+    data_type: TYPE_INT32
+    dims: [1]
+  }
+]
+output [
+  {
+    name: "detection_boxes"
+    data_type: TYPE_FP32
+    dims: [300, 4]
+  }
+]
+output [
+  {
+    name: "detection_scores"
+    data_type: TYPE_FP32
+    dims: [300]
+  }
+]
+output [
+  {
+    name: "detection_classes"
+    data_type: TYPE_INT32
+    dims: [300]
+  }
+]
+output [
+  {
+    name: "detection_masks"
+    data_type: TYPE_FP32
+    dims: [7680000]
+  }
+]
+output [
+  {
+    name: "mask_offsets"
+    data_type: TYPE_INT32
+    dims: [300]
+  }
+]
+output [
+  {
+    name: "mask_shapes"
+    data_type: TYPE_INT32
+    dims: [300, 2]
+  }
+]
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+  }
+]
+parameters: { key: "num_classes" value: { string_value: "80" } }
+parameters: { key: "num_masks" value: { string_value: "32" } }
+parameters: { key: "proto_height" value: { string_value: "160" } }
+parameters: { key: "proto_width" value: { string_value: "160" } }
+parameters: { key: "input_width" value: { string_value: "640" } }
+parameters: { key: "input_height" value: { string_value: "640" } }
+parameters: { key: "confidence_threshold" value: { string_value: "0.25" } }
+parameters: { key: "iou_threshold" value: { string_value: "0.45" } }
+parameters: { key: "max_detections" value: { string_value: "300" } }
+parameters: { key: "max_candidates" value: { string_value: "1000" } }
+parameters: { key: "score_activation" value: { string_value: "none" } }
+parameters: { key: "output_format" value: { string_value: "channels_first" } }

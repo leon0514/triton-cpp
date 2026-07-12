@@ -98,9 +98,50 @@ function drawDetection(det) {
     drawPose(det)
   }
 
-  if (props.modelType === 'seg' && props.showSeg) {
-    // seg placeholder
+  if (props.modelType === 'seg' && props.showSeg && det.mask) {
+    drawSeg(det)
   }
+}
+
+function drawSeg(det) {
+  const [x1, y1, x2, y2] = det.box
+  const [x1p, y1p] = applyTransform(x1, y1, props.transform)
+  const [x2p, y2p] = applyTransform(x2, y2, props.transform)
+  const boxW = x2p - x1p
+  const boxH = y2p - y1p
+  if (boxW <= 0 || boxH <= 0) return
+
+  const mask = det.mask
+  const maskH = mask.length
+  const maskW = mask[0]?.length || 0
+  if (maskH <= 0 || maskW <= 0) return
+
+  const color = getColor(det.class_id)
+  const r = parseInt(color.slice(1, 3), 16)
+  const g = parseInt(color.slice(3, 5), 16)
+  const b = parseInt(color.slice(5, 7), 16)
+
+  const tmp = document.createElement('canvas')
+  tmp.width = maskW
+  tmp.height = maskH
+  const tctx = tmp.getContext('2d')
+  const imgData = tctx.createImageData(maskW, maskH)
+  for (let y = 0; y < maskH; y++) {
+    for (let x = 0; x < maskW; x++) {
+      const idx = (y * maskW + x) * 4
+      const alpha = mask[y][x] * 0.5
+      imgData.data[idx] = r
+      imgData.data[idx + 1] = g
+      imgData.data[idx + 2] = b
+      imgData.data[idx + 3] = Math.floor(alpha * 255)
+    }
+  }
+  tctx.putImageData(imgData, 0, 0)
+
+  ctx.save()
+  ctx.globalCompositeOperation = 'source-over'
+  ctx.drawImage(tmp, x1p, y1p, boxW, boxH)
+  ctx.restore()
 }
 
 function drawAABB(det) {

@@ -139,6 +139,14 @@ async def infer(
         if "pose" in model_name:
             output_names.append("detection_keypoints")
 
+        # Segmentation models have mask outputs
+        if "seg" in model_name:
+            output_names.extend([
+                "detection_masks",
+                "mask_offsets",
+                "mask_shapes",
+            ])
+
         outputs = [httpclient.InferRequestedOutput(name) for name in output_names]
 
         client = get_triton_client()
@@ -174,6 +182,17 @@ async def infer(
             if "pose" in model_name:
                 kpts = response.as_numpy("detection_keypoints")[0, i]
                 det["keypoints"] = kpts.tolist()
+
+            if "seg" in model_name:
+                masks = response.as_numpy("detection_masks")[0]
+                offsets = response.as_numpy("mask_offsets")[0]
+                shapes = response.as_numpy("mask_shapes")[0]
+                off = int(offsets[i])
+                h, w = int(shapes[i, 0]), int(shapes[i, 1])
+                if h > 0 and w > 0 and off >= 0:
+                    det["mask_shape"] = [h, w]
+                    det["mask_offset"] = off
+                    det["mask"] = masks[off : off + h * w].reshape(h, w).tolist()
 
             result["detections"].append(det)
 
