@@ -7,6 +7,7 @@
 - `yolov5_postprocess`：YOLOv5 检测后处理。
 - `yolo26_postprocess`：YOLO26 one-to-one 检测头后处理。
 - `rfdetr_postprocess`：RF-DETR 后处理。
+- `rfdetr_seg_postprocess`：RF-DETR 分割后处理（支持 `return_masks` 开关）。
 
 模型仓库位于 `workspace/models/`，所有自定义后端 `.so` 都嵌在对应模型的 `1/` 目录下，通过 `docker-compose.yml` 一键启动。
 
@@ -60,6 +61,7 @@ docker run --rm --gpus all \
   build/libtriton_yolov5_postprocess.so
   build/libtriton_yolo26_postprocess.so
   build/libtriton_rfdetr_postprocess.so
+  build/libtriton_rfdetr_seg_postprocess.so
   ```
 
 ### 2. 复制产物到模型仓库
@@ -74,6 +76,7 @@ cp build/libtriton_yolo11_seg_postprocess.so workspace/models/yolo11_seg_postpro
 cp build/libtriton_yolov5_postprocess.so workspace/models/yolov5_postprocess/1/
 cp build/libtriton_yolo26_postprocess.so workspace/models/yolo26_postprocess/1/
 cp build/libtriton_rfdetr_postprocess.so workspace/models/rfdetr_postprocess/1/
+cp build/libtriton_rfdetr_seg_postprocess.so workspace/models/rfdetr_seg_postprocess/1/
 ```
 
 ### 3. 自定义 CUDA 架构
@@ -608,6 +611,30 @@ trtexec --onnx=yolo26s.onnx \
 ```
 
 YOLO26 输出为 `[batch, 300, 6]`，后处理无需 NMS。
+
+### 7. RF-DETR Seg
+
+```bash
+cd workspace/models/rfdetr_seg/1
+
+# ONNX -> TensorRT plan（input 384x384，max batch 16，FP16）
+/usr/src/tensorrt/bin/trtexec \
+  --onnx=model.onnx \
+  --saveEngine=model.plan \
+  --minShapes=input:1x3x384x384 \
+  --optShapes=input:8x3x384x384 \
+  --maxShapes=input:16x3x384x384 \
+  --fp16 \
+  --skipInference
+```
+
+或直接使用模型目录下的脚本：
+
+```bash
+bash workspace/models/rfdetr_seg/convert_rfdetr_seg.sh
+```
+
+`config.pbtxt` 已配置为 `platform: "tensorrt_plan"`，输出 `dets`/`labels`/`masks`。
 
 ### 7. RF-DETR
 

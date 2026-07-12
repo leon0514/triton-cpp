@@ -23,6 +23,7 @@
 #   /models/yolov5_postprocess/1/libtriton_yolov5_postprocess.so
 #   /models/yolo26_postprocess/1/libtriton_yolo26_postprocess.so
 #   /models/rfdetr_postprocess/1/libtriton_rfdetr_postprocess.so
+#   /models/rfdetr_seg_postprocess/1/libtriton_rfdetr_seg_postprocess.so
 
 services:
   triton:

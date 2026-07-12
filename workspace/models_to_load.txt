@@ -9,3 +9,4 @@ yolo11_seg_ensemble
 yolo26_ensemble
 yolov5_ensemble
 rfdetr_ensemble
+rfdetr_seg_ensemble
