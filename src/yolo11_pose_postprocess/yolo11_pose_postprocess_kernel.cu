@@ -10,8 +10,7 @@
 #include <cuda_fp16.h>
 #include <float.h>
 
-#include <thrust/sort.h>
-#include <thrust/device_ptr.h>
+#include <cub/cub.cuh>
 
 namespace yolo11_pose_postprocess
 {
@@ -257,6 +256,21 @@ __global__ void nms_kernel(
     num_dets[b] = kept;
 }
 
+// 从候选框中提取 score/key 并复制 value，供 CUB 分段排序使用
+__global__ void prepare_sort_kernel(
+    const Candidate *candidates,
+    int total,
+    float *keys_out,
+    Candidate *values_out)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total)
+        return;
+
+    keys_out[idx]   = candidates[idx].score;
+    values_out[idx] = candidates[idx];
+}
+
 __global__ void init_candidates_kernel(
     int total_images,
     int max_candidates,
@@ -319,6 +333,27 @@ __global__ void init_output_kernel(
         num_dets[idx] = 0;
 }
 
+size_t get_segmented_sort_temp_storage_bytes(
+    int total_candidates, int num_segments)
+{
+    size_t bytes = 0;
+    float *d_keys_in = nullptr;
+    float *d_keys_out = nullptr;
+    Candidate *d_candidates_in = nullptr;
+    Candidate *d_candidates_out = nullptr;
+    int *d_offsets = nullptr;
+
+    cub::DeviceSegmentedRadixSort::SortPairsDescending(
+        nullptr, bytes,
+        d_keys_in, d_keys_out,
+        d_candidates_in, d_candidates_out,
+        total_candidates, num_segments,
+        d_offsets, d_offsets + 1,
+        0, sizeof(float) * 8);
+
+    return bytes;
+}
+
 void yolo11_pose_postprocess_gpu(
     const void *input,
     bool input_is_half,
@@ -342,6 +377,13 @@ void yolo11_pose_postprocess_gpu(
     float *d_scores,
     int *d_classes,
     float *d_output_keypoints,
+    float *d_sort_keys_in,
+    float *d_sort_keys_out,
+    Candidate *d_sort_candidates_in,
+    Candidate *d_sort_candidates_out,
+    int *d_sort_offsets,
+    void *d_cub_temp,
+    size_t cub_temp_storage_bytes,
     cudaStream_t stream)
 {
     if (total_images <= 0 || num_anchors <= 0)
@@ -395,12 +437,30 @@ void yolo11_pose_postprocess_gpu(
         total_images, max_candidates, d_counts);
     checkRuntime(cudaPeekAtLastError());
 
-    // 将每张图的候选框按 score 降序排序
-    for (int b = 0; b < total_images; ++b)
-    {
-        thrust::device_ptr<Candidate> ptr(d_candidates + b * max_candidates);
-        thrust::sort(ptr, ptr + max_candidates, CandidateScoreGreater());
-    }
+    // 使用 CUB DeviceSegmentedRadixSort 在 GPU 上对所有 batch 并行排序，
+    // 避免 thrust::sort 需要的 cudaStreamSynchronize + 主机端循环。
+    int sort_total = total_images * max_candidates;
+    int grid_sort = (sort_total + block_init - 1) / block_init;
+    prepare_sort_kernel<<<grid_sort, block_init, 0, stream>>>(
+        d_candidates, sort_total,
+        d_sort_keys_in, d_sort_candidates_in);
+    checkRuntime(cudaPeekAtLastError());
+
+    checkRuntime(cub::DeviceSegmentedRadixSort::SortPairsDescending(
+        d_cub_temp, cub_temp_storage_bytes,
+        d_sort_keys_in, d_sort_keys_out,
+        d_sort_candidates_in, d_sort_candidates_out,
+        sort_total,
+        total_images,
+        d_sort_offsets, d_sort_offsets + 1,
+        0, sizeof(float) * 8,
+        stream));
+
+    // 将排序后的候选框复制回 d_candidates，供 NMS 使用
+    checkRuntime(cudaMemcpyAsync(
+        d_candidates, d_sort_candidates_out,
+        sort_total * sizeof(Candidate),
+        cudaMemcpyDeviceToDevice, stream));
 
     // NMS，每张图一个线程（候选数通常几百，完全够用）
     int block_nms = 1;

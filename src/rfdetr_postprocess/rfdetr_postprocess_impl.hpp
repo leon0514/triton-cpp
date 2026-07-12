@@ -23,6 +23,7 @@ struct RfDetrPostprocessConfig
     float confidence_threshold = 0.25f;
     int max_detections         = 300;
     int max_batch_size         = 16;
+    int num_queries            = 300;
     float input_width          = 640.0f;
     float input_height         = 640.0f;
     // 需要跳过的 COCO ID（空类别），默认 COCO 90 类中的 10 个空 ID
@@ -72,6 +73,15 @@ class RfDetrPostprocess
     tensor::Memory<float> boxes_workspace_;
     tensor::Memory<float> scores_workspace_;
     tensor::Memory<int> classes_workspace_;
+
+    // CUB DeviceSegmentedRadixSort 工作区（避免 thrust + 主机同步）
+    tensor::Memory<float> sort_keys_in_workspace_;
+    tensor::Memory<float> sort_keys_out_workspace_;
+    tensor::Memory<Candidate> sort_candidates_in_workspace_;
+    tensor::Memory<Candidate> sort_candidates_out_workspace_;
+    tensor::Memory<int> sort_offsets_workspace_;
+    tensor::Memory<uint8_t> cub_sort_temp_storage_workspace_;
+    size_t cub_sort_temp_storage_bytes_ = 0;
 };
 
 } // namespace rfdetr_postprocess

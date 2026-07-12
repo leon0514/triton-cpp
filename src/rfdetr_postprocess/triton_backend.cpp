@@ -213,10 +213,10 @@ struct ModelInstanceState
         postprocessor = std::make_unique<rfdetr_postprocess::RfDetrPostprocess>(
             model_state->config);
 
-        // 预分配输入 workspace：max_batch * 300 * 4 以及 max_batch * 300 * 91，按 FP32 计算
+        // 预分配输入 workspace：max_batch * num_queries * 4 以及 max_batch * num_queries * 91，按 FP32 计算
         const auto &cfg = model_state->config;
-        size_t max_dets_elements   = static_cast<size_t>(cfg.max_batch_size) * 300 * 4;
-        size_t max_labels_elements = static_cast<size_t>(cfg.max_batch_size) * 300 * 91;
+        size_t max_dets_elements   = static_cast<size_t>(cfg.max_batch_size) * cfg.num_queries * 4;
+        size_t max_labels_elements = static_cast<size_t>(cfg.max_batch_size) * cfg.num_queries * 91;
         dets_workspace_.gpu(max_dets_elements * sizeof(float));
         labels_workspace_.gpu(max_labels_elements * sizeof(float));
 

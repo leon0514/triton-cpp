@@ -117,6 +117,12 @@ TRITONSERVER_Error *ParseRfDetrPostprocessConfig(
             }
         }
 
+        std::string num_queries = GetStringParameter(parameters, "num_queries");
+        if (!num_queries.empty())
+        {
+            config.num_queries = std::stoi(num_queries);
+        }
+
         std::string input_width = GetStringParameter(parameters, "input_width");
         if (!input_width.empty())
         {
@@ -146,6 +152,10 @@ TRITONSERVER_Error *ParseRfDetrPostprocessConfig(
         if (config.input_width <= 0.0f || config.input_height <= 0.0f)
         {
             RETURN_TRITON_ERROR(INVALID_ARG, "input_width and input_height must be positive");
+        }
+        if (config.num_queries <= 0)
+        {
+            RETURN_TRITON_ERROR(INVALID_ARG, "num_queries must be positive");
         }
 
         return nullptr;

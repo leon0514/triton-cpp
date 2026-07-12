@@ -3,16 +3,15 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "yolo11_obb_postprocess/yolo11_obb_postprocess_kernel.hpp"
+#include "rotated_iou.cuh"
+#include "common/check.hpp"
+
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
-#include <thrust/device_ptr.h>
-#include <thrust/sort.h>
-#include <thrust/execution_policy.h>
+#include <cub/cub.cuh>
 #include <algorithm>
 #include <cmath>
-
-#include "yolo11_obb_postprocess_kernel.hpp"
-#include "rotated_iou.cuh"
 
 namespace yolo11_obb_postprocess
 {
@@ -176,17 +175,21 @@ __global__ void decode_filter_kernel(
 }
 
 // ------------------------------------------------------------------
-// 排序比较器：按 batch 聚合后再按 score 降序
+// 从候选框中提取 score/key 并复制 value，供 CUB 分段排序使用
 // ------------------------------------------------------------------
-struct CandidateCompare
+__global__ void prepare_sort_kernel(
+    const Candidate *candidates,
+    int total,
+    float *keys_out,
+    Candidate *values_out)
 {
-    __device__ bool operator()(const Candidate &a, const Candidate &b) const
-    {
-        if (a.batch_idx != b.batch_idx)
-            return a.batch_idx < b.batch_idx;
-        return a.score > b.score; // score 降序
-    }
-};
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total)
+        return;
+
+    keys_out[idx]   = candidates[idx].score;
+    values_out[idx] = candidates[idx];
+}
 
 // ------------------------------------------------------------------
 // 初始化输出缓冲区：未使用位置清零，避免客户端读到脏数据
@@ -276,6 +279,30 @@ __global__ void nms_kernel(
 }
 
 // ------------------------------------------------------------------
+// 查询 CUB DeviceSegmentedRadixSort 所需临时存储字节数
+// ------------------------------------------------------------------
+size_t get_segmented_sort_temp_storage_bytes(
+    int total_candidates, int num_segments)
+{
+    size_t bytes = 0;
+    float *d_keys_in = nullptr;
+    float *d_keys_out = nullptr;
+    Candidate *d_candidates_in = nullptr;
+    Candidate *d_candidates_out = nullptr;
+    int *d_offsets = nullptr;
+
+    cub::DeviceSegmentedRadixSort::SortPairsDescending(
+        nullptr, bytes,
+        d_keys_in, d_keys_out,
+        d_candidates_in, d_candidates_out,
+        total_candidates, num_segments,
+        d_offsets, d_offsets + 1,
+        0, sizeof(float) * 8);
+
+    return bytes;
+}
+
+// ------------------------------------------------------------------
 // 对外主函数
 // ------------------------------------------------------------------
 void yolo11_obb_postprocess_gpu(
@@ -296,6 +323,13 @@ void yolo11_obb_postprocess_gpu(
     float *d_boxes,
     float *d_scores,
     int *d_classes,
+    float *d_sort_keys_in,
+    float *d_sort_keys_out,
+    Candidate *d_sort_candidates_in,
+    Candidate *d_sort_candidates_out,
+    int *d_sort_offsets,
+    void *d_cub_temp,
+    size_t cub_temp_storage_bytes,
     cudaStream_t stream)
 {
     const int total_work = total_images * num_anchors;
@@ -309,6 +343,7 @@ void yolo11_obb_postprocess_gpu(
     init_grid      = min(init_grid, 65536);
     init_candidates_kernel<<<init_grid, block_size, 0, stream>>>(
         d_candidates, total_images, max_candidates);
+    checkRuntime(cudaPeekAtLastError());
 
     // 2. 清零计数
     cudaMemsetAsync(d_counts, 0, sizeof(int) * total_images, stream);
@@ -326,11 +361,31 @@ void yolo11_obb_postprocess_gpu(
         max_candidates,
         d_counts,
         d_candidates);
+    checkRuntime(cudaPeekAtLastError());
 
-    // 4. 按 (batch_idx, score) 排序
-    thrust::device_ptr<Candidate> cand_ptr(d_candidates);
-    thrust::sort(thrust::cuda::par.on(stream), cand_ptr,
-                 cand_ptr + total_images * max_candidates, CandidateCompare());
+    // 4. 使用 CUB DeviceSegmentedRadixSort 在 GPU 上对所有 batch 并行排序
+    int sort_total = total_images * max_candidates;
+    int grid_sort  = (sort_total + block_size - 1) / block_size;
+    prepare_sort_kernel<<<grid_sort, block_size, 0, stream>>>(
+        d_candidates, sort_total,
+        d_sort_keys_in, d_sort_candidates_in);
+    checkRuntime(cudaPeekAtLastError());
+
+    checkRuntime(cub::DeviceSegmentedRadixSort::SortPairsDescending(
+        d_cub_temp, cub_temp_storage_bytes,
+        d_sort_keys_in, d_sort_keys_out,
+        d_sort_candidates_in, d_sort_candidates_out,
+        sort_total,
+        total_images,
+        d_sort_offsets, d_sort_offsets + 1,
+        0, sizeof(float) * 8,
+        stream));
+
+    // 将排序后的候选框复制回 d_candidates，供 NMS 使用
+    checkRuntime(cudaMemcpyAsync(
+        d_candidates, d_sort_candidates_out,
+        sort_total * sizeof(Candidate),
+        cudaMemcpyDeviceToDevice, stream));
 
     // 5. 清零输出缓冲区
     int out_total = total_images * max_detections;
@@ -338,6 +393,7 @@ void yolo11_obb_postprocess_gpu(
     out_grid      = min(out_grid, 65536);
     init_output_kernel<<<out_grid, block_size, 0, stream>>>(
         total_images, max_detections, d_num_dets, d_boxes, d_scores, d_classes);
+    checkRuntime(cudaPeekAtLastError());
 
     // 6. NMS
     int nms_grid = (total_images + block_size - 1) / block_size;
@@ -353,6 +409,7 @@ void yolo11_obb_postprocess_gpu(
         d_boxes,
         d_scores,
         d_classes);
+    checkRuntime(cudaPeekAtLastError());
 
     // 不在这里同步，由调用者通过 cudaEvent 控制，避免阻塞 CPU
 }

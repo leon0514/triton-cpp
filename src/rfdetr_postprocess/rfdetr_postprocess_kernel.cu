@@ -10,8 +10,7 @@
 #include <cuda_fp16.h>
 #include <float.h>
 
-#include <thrust/sort.h>
-#include <thrust/device_ptr.h>
+#include <cub/cub.cuh>
 
 namespace rfdetr_postprocess
 {
@@ -121,13 +120,20 @@ __global__ void filter_kernel(
     candidates[batch_idx * num_queries + pos] = cand;
 }
 
-struct CandidateScoreGreater
+// 从候选框中提取 score/key 并复制 value，供 CUB 分段排序使用
+__global__ void prepare_sort_kernel(
+    const Candidate *candidates,
+    int total,
+    float *keys_out,
+    Candidate *values_out)
 {
-    __device__ __forceinline__ bool operator()(const Candidate &a, const Candidate &b) const
-    {
-        return a.score > b.score;
-    }
-};
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total)
+        return;
+
+    keys_out[idx]   = candidates[idx].score;
+    values_out[idx] = candidates[idx];
+}
 
 __global__ void init_output_kernel(
     int total_images,
@@ -190,6 +196,27 @@ __global__ void write_topk_kernel(
     num_dets[b] = keep;
 }
 
+size_t get_segmented_sort_temp_storage_bytes(
+    int total_candidates, int num_segments)
+{
+    size_t bytes = 0;
+    float *d_keys_in = nullptr;
+    float *d_keys_out = nullptr;
+    Candidate *d_candidates_in = nullptr;
+    Candidate *d_candidates_out = nullptr;
+    int *d_offsets = nullptr;
+
+    cub::DeviceSegmentedRadixSort::SortPairsDescending(
+        nullptr, bytes,
+        d_keys_in, d_keys_out,
+        d_candidates_in, d_candidates_out,
+        total_candidates, num_segments,
+        d_offsets, d_offsets + 1,
+        0, sizeof(float) * 8);
+
+    return bytes;
+}
+
 void rfdetr_postprocess_gpu(
     const void *dets,
     const void *labels,
@@ -207,6 +234,13 @@ void rfdetr_postprocess_gpu(
     float *d_scores,
     int *d_classes,
     const int *d_coco_id_to_index,
+    float *d_sort_keys_in,
+    float *d_sort_keys_out,
+    Candidate *d_sort_candidates_in,
+    Candidate *d_sort_candidates_out,
+    int *d_sort_offsets,
+    void *d_cub_temp,
+    size_t cub_temp_storage_bytes,
     cudaStream_t stream)
 {
     if (total_images <= 0 || num_queries <= 0)
@@ -249,12 +283,29 @@ void rfdetr_postprocess_gpu(
     }
     checkRuntime(cudaPeekAtLastError());
 
-    // 3. 每张图按 score 降序排序
-    for (int b = 0; b < total_images; ++b)
-    {
-        thrust::device_ptr<Candidate> ptr(d_candidates + b * num_queries);
-        thrust::sort(ptr, ptr + num_queries, CandidateScoreGreater());
-    }
+    // 3. 一次性对所有 batch 按 score 降序排序（CUB 分段排序，避免 thrust 主机同步）
+    int sort_total = total_images * num_queries;
+    int grid_sort = (sort_total + block - 1) / block;
+    prepare_sort_kernel<<<grid_sort, block, 0, stream>>>(
+        d_candidates, sort_total,
+        d_sort_keys_in, d_sort_candidates_in);
+    checkRuntime(cudaPeekAtLastError());
+
+    checkRuntime(cub::DeviceSegmentedRadixSort::SortPairsDescending(
+        d_cub_temp, cub_temp_storage_bytes,
+        d_sort_keys_in, d_sort_keys_out,
+        d_sort_candidates_in, d_sort_candidates_out,
+        sort_total,
+        total_images,
+        d_sort_offsets, d_sort_offsets + 1,
+        0, sizeof(float) * 8,
+        stream));
+
+    // 将排序后的候选框复制回 d_candidates，供 top-k 使用
+    checkRuntime(cudaMemcpyAsync(
+        d_candidates, d_sort_candidates_out,
+        sort_total * sizeof(Candidate),
+        cudaMemcpyDeviceToDevice, stream));
 
     // 4. 清零输出缓冲区
     const int total_out = total_images * max_detections;

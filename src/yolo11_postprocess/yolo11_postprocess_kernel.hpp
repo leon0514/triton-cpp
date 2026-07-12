@@ -48,8 +48,19 @@ struct Candidate
  * @param d_boxes          检测框输出缓冲区（device float[total_images * max_detections * 4]）
  * @param d_scores         分数输出缓冲区（device float[total_images * max_detections]）
  * @param d_classes        类别输出缓冲区（device int[total_images * max_detections]）
+ * @param d_sort_keys_in   CUB 排序输入 key 缓冲区（device float[total_images * max_candidates]）
+ * @param d_sort_keys_out  CUB 排序输出 key 缓冲区（device float[total_images * max_candidates]）
+ * @param d_sort_candidates_in  CUB 排序输入 value 缓冲区（device Candidate[total_images * max_candidates]）
+ * @param d_sort_candidates_out CUB 排序输出 value 缓冲区（device Candidate[total_images * max_candidates]）
+ * @param d_sort_offsets   分段排序偏移（device int[total_images + 1]）
+ * @param d_cub_temp       CUB 临时存储（可为 nullptr 当大小为 0）
+ * @param cub_temp_storage_bytes CUB 临时存储字节数
  * @param stream           CUDA 流
  */
+// 查询 CUB DeviceSegmentedRadixSort 所需临时存储字节数
+size_t get_segmented_sort_temp_storage_bytes(
+    int total_candidates, int num_segments);
+
 void yolo11_postprocess_gpu(
     const void *input,
     bool input_is_half,
@@ -68,6 +79,13 @@ void yolo11_postprocess_gpu(
     float *d_boxes,
     float *d_scores,
     int *d_classes,
+    float *d_sort_keys_in,
+    float *d_sort_keys_out,
+    Candidate *d_sort_candidates_in,
+    Candidate *d_sort_candidates_out,
+    int *d_sort_offsets,
+    void *d_cub_temp,
+    size_t cub_temp_storage_bytes,
     cudaStream_t stream);
 
 } // namespace yolo11_postprocess

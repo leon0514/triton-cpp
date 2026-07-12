@@ -93,6 +93,15 @@ class Yolo11PosePostprocess
     tensor::Memory<float> scores_workspace_;
     tensor::Memory<int> classes_workspace_;
     tensor::Memory<float> keypoints_workspace_;
+
+    // CUB DeviceSegmentedRadixSort 工作区（避免 thrust + 主机同步）
+    tensor::Memory<float> sort_keys_in_workspace_;
+    tensor::Memory<float> sort_keys_out_workspace_;
+    tensor::Memory<Candidate> sort_candidates_in_workspace_;
+    tensor::Memory<Candidate> sort_candidates_out_workspace_;
+    tensor::Memory<int> sort_offsets_workspace_;
+    tensor::Memory<uint8_t> cub_sort_temp_storage_workspace_;
+    size_t cub_sort_temp_storage_bytes_ = 0;
 };
 
 } // namespace yolo11_pose_postprocess
