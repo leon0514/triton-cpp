@@ -171,6 +171,8 @@ struct ModelInstanceState
     std::unique_ptr<yolo26_postprocess::Yolo26Postprocess> postprocessor;
     cudaStream_t stream = nullptr;
     tensor::Memory<uint8_t> input_workspace_;
+    int *h_num_dets_pinned = nullptr;
+    size_t pinned_capacity = 0;
     CompletionQueue completion_queue;
 
     explicit ModelInstanceState(TRITONBACKEND_ModelInstance *instance)
@@ -188,6 +190,11 @@ struct ModelInstanceState
         if (stream != nullptr)
         {
             cudaStreamDestroy(stream);
+        }
+
+        if (h_num_dets_pinned != nullptr)
+        {
+            cudaFreeHost(h_num_dets_pinned);
         }
     }
 
@@ -208,6 +215,17 @@ struct ModelInstanceState
         const auto &cfg = model_state->config;
         size_t max_input_elements = static_cast<size_t>(cfg.max_batch_size) * 300 * 6;
         input_workspace_.gpu(max_input_elements * sizeof(float));
+
+        // 预分配 page-locked host buffer，用于拷贝实际检测数量
+        pinned_capacity = static_cast<size_t>(cfg.max_batch_size);
+        cuerr = cudaHostAlloc(
+            reinterpret_cast<void **>(&h_num_dets_pinned),
+            pinned_capacity * sizeof(int),
+            cudaHostAllocDefault);
+        if (cuerr != cudaSuccess)
+        {
+            RETURN_TRITON_ERROR(INTERNAL, cudaGetErrorString(cuerr));
+        }
 
         return nullptr;
     }
@@ -637,9 +655,36 @@ TRITONBACKEND_ModelInstanceExecute(
     int *d_classes  = postprocessor->classes_gpu();
 
     // 7. 把每个样本的实际 num_dets 拷贝到主机，用于动态输出 shape
-    std::vector<int> h_num_dets(total_images);
+    if (static_cast<size_t>(total_images) > instance_state->pinned_capacity)
+    {
+        if (instance_state->h_num_dets_pinned != nullptr)
+        {
+            cudaError_t free_err = cudaFreeHost(instance_state->h_num_dets_pinned);
+            if (free_err != cudaSuccess)
+            {
+                guard.SetError(TRITONSERVER_ErrorNew(
+                    TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(free_err)));
+                return nullptr;
+            }
+        }
+
+        instance_state->pinned_capacity = static_cast<size_t>(total_images);
+        cudaError_t alloc_err = cudaHostAlloc(
+            reinterpret_cast<void **>(&instance_state->h_num_dets_pinned),
+            instance_state->pinned_capacity * sizeof(int),
+            cudaHostAllocDefault);
+        if (alloc_err != cudaSuccess)
+        {
+            instance_state->h_num_dets_pinned = nullptr;
+            instance_state->pinned_capacity   = 0;
+            guard.SetError(TRITONSERVER_ErrorNew(
+                TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(alloc_err)));
+            return nullptr;
+        }
+    }
+
     cudaError_t num_dets_err = cudaMemcpyAsync(
-        h_num_dets.data(), d_num_dets, total_images * sizeof(int),
+        instance_state->h_num_dets_pinned, d_num_dets, total_images * sizeof(int),
         cudaMemcpyDeviceToHost, stream);
     if (num_dets_err != cudaSuccess)
     {
@@ -654,6 +699,7 @@ TRITONBACKEND_ModelInstanceExecute(
             TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(num_dets_err)));
         return nullptr;
     }
+    int *h_num_dets = instance_state->h_num_dets_pinned;
 
     // 8. 根据实际 num_dets 分配动态输出 buffer
     for (int i = 0; i < request_num; ++i)

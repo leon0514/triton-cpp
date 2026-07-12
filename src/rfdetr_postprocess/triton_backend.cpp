@@ -174,6 +174,9 @@ struct ModelInstanceState
     tensor::Memory<uint8_t> labels_workspace_;
     CompletionQueue completion_queue;
 
+    int *h_num_dets_pinned = nullptr;
+    size_t pinned_capacity = 0;
+
     explicit ModelInstanceState(TRITONBACKEND_ModelInstance *instance)
         : triton_instance(instance)
     {
@@ -189,6 +192,11 @@ struct ModelInstanceState
         if (stream != nullptr)
         {
             cudaStreamDestroy(stream);
+        }
+
+        if (h_num_dets_pinned != nullptr)
+        {
+            cudaFreeHost(h_num_dets_pinned);
         }
     }
 
@@ -211,6 +219,16 @@ struct ModelInstanceState
         size_t max_labels_elements = static_cast<size_t>(cfg.max_batch_size) * 300 * 91;
         dets_workspace_.gpu(max_dets_elements * sizeof(float));
         labels_workspace_.gpu(max_labels_elements * sizeof(float));
+
+        pinned_capacity = static_cast<size_t>(cfg.max_batch_size);
+        cudaError_t pinned_err = cudaHostAlloc(
+            &h_num_dets_pinned, pinned_capacity * sizeof(int), cudaHostAllocDefault);
+        if (pinned_err != cudaSuccess)
+        {
+            h_num_dets_pinned = nullptr;
+            pinned_capacity = 0;
+            RETURN_TRITON_ERROR(INTERNAL, cudaGetErrorString(pinned_err));
+        }
 
         return nullptr;
     }
@@ -740,9 +758,39 @@ TRITONBACKEND_ModelInstanceExecute(
     int *d_classes  = postprocessor->classes_gpu();
 
     // 7. 把每个样本的实际 num_dets 拷贝到主机，用于动态输出 shape
-    std::vector<int> h_num_dets(total_images);
+    if (total_images > static_cast<int>(instance_state->pinned_capacity))
+    {
+        if (instance_state->h_num_dets_pinned != nullptr)
+        {
+            cudaError_t free_err = cudaFreeHost(instance_state->h_num_dets_pinned);
+            if (free_err != cudaSuccess)
+            {
+                guard.SetError(TRITONSERVER_ErrorNew(
+                    TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(free_err)));
+                return nullptr;
+            }
+            instance_state->h_num_dets_pinned = nullptr;
+            instance_state->pinned_capacity = 0;
+        }
+
+        cudaError_t alloc_err = cudaHostAlloc(
+            &instance_state->h_num_dets_pinned,
+            total_images * sizeof(int),
+            cudaHostAllocDefault);
+        if (alloc_err != cudaSuccess)
+        {
+            instance_state->h_num_dets_pinned = nullptr;
+            instance_state->pinned_capacity = 0;
+            guard.SetError(TRITONSERVER_ErrorNew(
+                TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(alloc_err)));
+            return nullptr;
+        }
+        instance_state->pinned_capacity = total_images;
+    }
+
+    int *h_num_dets = instance_state->h_num_dets_pinned;
     cudaError_t num_dets_err = cudaMemcpyAsync(
-        h_num_dets.data(), d_num_dets, total_images * sizeof(int),
+        h_num_dets, d_num_dets, total_images * sizeof(int),
         cudaMemcpyDeviceToHost, stream);
     if (num_dets_err != cudaSuccess)
     {
