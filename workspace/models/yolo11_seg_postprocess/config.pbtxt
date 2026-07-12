@@ -26,42 +26,42 @@ output [
   {
     name: "detection_boxes"
     data_type: TYPE_FP32
-    dims: [300, 4]
+    dims: [-1, 4]
   }
 ]
 output [
   {
     name: "detection_scores"
     data_type: TYPE_FP32
-    dims: [300]
+    dims: [-1]
   }
 ]
 output [
   {
     name: "detection_classes"
     data_type: TYPE_INT32
-    dims: [300]
+    dims: [-1]
   }
 ]
 output [
   {
     name: "detection_masks"
     data_type: TYPE_FP32
-    dims: [7680000]
+    dims: [-1]
   }
 ]
 output [
   {
     name: "mask_offsets"
     data_type: TYPE_INT32
-    dims: [300]
+    dims: [-1]
   }
 ]
 output [
   {
     name: "mask_shapes"
     data_type: TYPE_INT32
-    dims: [300, 2]
+    dims: [-1, 2]
   }
 ]
 instance_group [

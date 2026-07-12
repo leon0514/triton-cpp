@@ -11,6 +11,7 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -224,6 +225,7 @@ struct RequestInfo
 
     int batch_size = 1;
     int num_anchors = 0;
+    int actual_num_dets = 0;
     uint64_t total_output0_bytes = 0;
     uint64_t total_output1_bytes = 0;
     int image_offset = 0;
@@ -647,7 +649,7 @@ TRITONBACKEND_ModelInstanceExecute(
             }                                               \
         } while (false)
 
-    // 2. 为有效 request 创建 response 并分配输出 buffer
+    // 2. 为有效 request 创建 response（输出 buffer 在得到实际 num_dets 后再分配）
     for (int i = 0; i < request_num; ++i)
     {
         GUARDED_RETURN_IF_ERROR(TRITONBACKEND_ResponseNew(&infos[i].response, infos[i].request));
@@ -666,66 +668,6 @@ TRITONBACKEND_ModelInstanceExecute(
         infos[i].mask_offsets_mem_type_id = device_id;
         infos[i].mask_shapes_mem_type = TRITONSERVER_MEMORY_GPU;
         infos[i].mask_shapes_mem_type_id = device_id;
-
-        const int64_t num_dets_shape[2] = {infos[i].batch_size, 1};
-        const int64_t boxes_shape[3] = {infos[i].batch_size, max_detections, 4};
-        const int64_t scores_shape[2] = {infos[i].batch_size, max_detections};
-        const int64_t classes_shape[2] = {infos[i].batch_size, max_detections};
-        const int64_t detection_masks_shape[2] = {
-            infos[i].batch_size, max_detections * proto_h * proto_w};
-        const int64_t mask_offsets_shape[2] = {infos[i].batch_size, max_detections};
-        const int64_t mask_shapes_shape[3] = {infos[i].batch_size, max_detections, 2};
-
-        const size_t num_dets_bytes = infos[i].batch_size * sizeof(int);
-        const size_t boxes_bytes = infos[i].batch_size * max_detections * 4 * sizeof(float);
-        const size_t scores_bytes = infos[i].batch_size * max_detections * sizeof(float);
-        const size_t classes_bytes = infos[i].batch_size * max_detections * sizeof(int);
-        const size_t detection_masks_bytes = infos[i].batch_size * max_detections *
-                                             proto_h * proto_w * sizeof(float);
-        const size_t mask_offsets_bytes = infos[i].batch_size * max_detections * sizeof(int);
-        const size_t mask_shapes_bytes = infos[i].batch_size * max_detections * 2 * sizeof(int);
-
-        GUARDED_RETURN_IF_ERROR(AllocateOutput(
-            infos[i].response, "num_dets", TRITONSERVER_TYPE_INT32,
-            num_dets_shape, 2, num_dets_bytes,
-            &infos[i].num_dets_buffer, &infos[i].num_dets_mem_type,
-            &infos[i].num_dets_mem_type_id));
-
-        GUARDED_RETURN_IF_ERROR(AllocateOutput(
-            infos[i].response, "detection_boxes", TRITONSERVER_TYPE_FP32,
-            boxes_shape, 3, boxes_bytes,
-            &infos[i].boxes_buffer, &infos[i].boxes_mem_type,
-            &infos[i].boxes_mem_type_id));
-
-        GUARDED_RETURN_IF_ERROR(AllocateOutput(
-            infos[i].response, "detection_scores", TRITONSERVER_TYPE_FP32,
-            scores_shape, 2, scores_bytes,
-            &infos[i].scores_buffer, &infos[i].scores_mem_type,
-            &infos[i].scores_mem_type_id));
-
-        GUARDED_RETURN_IF_ERROR(AllocateOutput(
-            infos[i].response, "detection_classes", TRITONSERVER_TYPE_INT32,
-            classes_shape, 2, classes_bytes,
-            &infos[i].classes_buffer, &infos[i].classes_mem_type,
-            &infos[i].classes_mem_type_id));
-
-        GUARDED_RETURN_IF_ERROR(AllocateOutput(
-            infos[i].response, "detection_masks", TRITONSERVER_TYPE_FP32,
-            detection_masks_shape, 2, detection_masks_bytes,
-            &infos[i].detection_masks_buffer, &infos[i].detection_masks_mem_type,
-            &infos[i].detection_masks_mem_type_id));
-
-        GUARDED_RETURN_IF_ERROR(AllocateOutput(
-            infos[i].response, "mask_offsets", TRITONSERVER_TYPE_INT32,
-            mask_offsets_shape, 2, mask_offsets_bytes,
-            &infos[i].mask_offsets_buffer, &infos[i].mask_offsets_mem_type,
-            &infos[i].mask_offsets_mem_type_id));
-
-        GUARDED_RETURN_IF_ERROR(AllocateOutput(
-            infos[i].response, "mask_shapes", TRITONSERVER_TYPE_INT32,
-            mask_shapes_shape, 3, mask_shapes_bytes,
-            &infos[i].mask_shapes_buffer, &infos[i].mask_shapes_mem_type,
-            &infos[i].mask_shapes_mem_type_id));
     }
 
     // 3. 计算整体 batch 规模并统一 num_anchors
@@ -824,10 +766,110 @@ TRITONBACKEND_ModelInstanceExecute(
     int *d_mask_offsets = postprocessor->mask_offsets_gpu();
     int *d_mask_shapes = postprocessor->mask_shapes_gpu();
 
-    // 7. 将结果从 workspace 分发到各 response 的 output buffer
+    // 7. 把每个样本的实际 num_dets 拷贝到主机，用于动态输出 shape
+    std::vector<int> h_num_dets(total_images);
+    cudaError_t num_dets_err = cudaMemcpyAsync(
+        h_num_dets.data(), d_num_dets, total_images * sizeof(int),
+        cudaMemcpyDeviceToHost, stream);
+    if (num_dets_err != cudaSuccess)
+    {
+        guard.SetError(TRITONSERVER_ErrorNew(
+            TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(num_dets_err)));
+        return nullptr;
+    }
+    num_dets_err = cudaStreamSynchronize(stream);
+    if (num_dets_err != cudaSuccess)
+    {
+        guard.SetError(TRITONSERVER_ErrorNew(
+            TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(num_dets_err)));
+        return nullptr;
+    }
+
+    // 8. 根据实际 num_dets 分配动态输出 buffer
+    for (int i = 0; i < request_num; ++i)
+    {
+        int offset = infos[i].image_offset;
+        int actual_num_dets = 0;
+        for (int b = 0; b < infos[i].batch_size; ++b)
+        {
+            actual_num_dets = std::max(actual_num_dets, h_num_dets[offset + b]);
+        }
+        if (actual_num_dets > max_detections)
+        {
+            actual_num_dets = max_detections;
+        }
+        if (actual_num_dets < 0)
+        {
+            actual_num_dets = 0;
+        }
+        infos[i].actual_num_dets = actual_num_dets;
+
+        const int64_t num_dets_shape[2] = {infos[i].batch_size, 1};
+        const int64_t boxes_shape[3] = {infos[i].batch_size, actual_num_dets, 4};
+        const int64_t scores_shape[2] = {infos[i].batch_size, actual_num_dets};
+        const int64_t classes_shape[2] = {infos[i].batch_size, actual_num_dets};
+        const int64_t detection_masks_shape[2] = {
+            infos[i].batch_size, actual_num_dets * proto_h * proto_w};
+        const int64_t mask_offsets_shape[2] = {infos[i].batch_size, actual_num_dets};
+        const int64_t mask_shapes_shape[3] = {infos[i].batch_size, actual_num_dets, 2};
+
+        const size_t num_dets_bytes = infos[i].batch_size * sizeof(int);
+        const size_t boxes_bytes = infos[i].batch_size * actual_num_dets * 4 * sizeof(float);
+        const size_t scores_bytes = infos[i].batch_size * actual_num_dets * sizeof(float);
+        const size_t classes_bytes = infos[i].batch_size * actual_num_dets * sizeof(int);
+        const size_t detection_masks_bytes = infos[i].batch_size * actual_num_dets *
+                                             proto_h * proto_w * sizeof(float);
+        const size_t mask_offsets_bytes = infos[i].batch_size * actual_num_dets * sizeof(int);
+        const size_t mask_shapes_bytes = infos[i].batch_size * actual_num_dets * 2 * sizeof(int);
+
+        GUARDED_RETURN_IF_ERROR(AllocateOutput(
+            infos[i].response, "num_dets", TRITONSERVER_TYPE_INT32,
+            num_dets_shape, 2, num_dets_bytes,
+            &infos[i].num_dets_buffer, &infos[i].num_dets_mem_type,
+            &infos[i].num_dets_mem_type_id));
+
+        GUARDED_RETURN_IF_ERROR(AllocateOutput(
+            infos[i].response, "detection_boxes", TRITONSERVER_TYPE_FP32,
+            boxes_shape, 3, boxes_bytes,
+            &infos[i].boxes_buffer, &infos[i].boxes_mem_type,
+            &infos[i].boxes_mem_type_id));
+
+        GUARDED_RETURN_IF_ERROR(AllocateOutput(
+            infos[i].response, "detection_scores", TRITONSERVER_TYPE_FP32,
+            scores_shape, 2, scores_bytes,
+            &infos[i].scores_buffer, &infos[i].scores_mem_type,
+            &infos[i].scores_mem_type_id));
+
+        GUARDED_RETURN_IF_ERROR(AllocateOutput(
+            infos[i].response, "detection_classes", TRITONSERVER_TYPE_INT32,
+            classes_shape, 2, classes_bytes,
+            &infos[i].classes_buffer, &infos[i].classes_mem_type,
+            &infos[i].classes_mem_type_id));
+
+        GUARDED_RETURN_IF_ERROR(AllocateOutput(
+            infos[i].response, "detection_masks", TRITONSERVER_TYPE_FP32,
+            detection_masks_shape, 2, detection_masks_bytes,
+            &infos[i].detection_masks_buffer, &infos[i].detection_masks_mem_type,
+            &infos[i].detection_masks_mem_type_id));
+
+        GUARDED_RETURN_IF_ERROR(AllocateOutput(
+            infos[i].response, "mask_offsets", TRITONSERVER_TYPE_INT32,
+            mask_offsets_shape, 2, mask_offsets_bytes,
+            &infos[i].mask_offsets_buffer, &infos[i].mask_offsets_mem_type,
+            &infos[i].mask_offsets_mem_type_id));
+
+        GUARDED_RETURN_IF_ERROR(AllocateOutput(
+            infos[i].response, "mask_shapes", TRITONSERVER_TYPE_INT32,
+            mask_shapes_shape, 3, mask_shapes_bytes,
+            &infos[i].mask_shapes_buffer, &infos[i].mask_shapes_mem_type,
+            &infos[i].mask_shapes_mem_type_id));
+    }
+
+    // 9. 将结果从 workspace 分发到各 response 的 output buffer
     for (const auto &info : infos)
     {
         const int offset = info.image_offset;
+        const int actual_num_dets = info.actual_num_dets;
 
         GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
             info.num_dets_buffer,
@@ -836,47 +878,82 @@ TRITONBACKEND_ModelInstanceExecute(
             info.num_dets_mem_type,
             stream));
 
-        GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
-            info.boxes_buffer,
-            d_boxes + offset * max_detections * 4,
-            info.batch_size * max_detections * 4 * sizeof(float),
-            info.boxes_mem_type,
-            stream));
+        if (actual_num_dets > 0)
+        {
+            GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                info.boxes_buffer,
+                d_boxes + offset * max_detections * 4,
+                info.batch_size * actual_num_dets * 4 * sizeof(float),
+                info.boxes_mem_type,
+                stream));
 
-        GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
-            info.scores_buffer,
-            d_scores + offset * max_detections,
-            info.batch_size * max_detections * sizeof(float),
-            info.scores_mem_type,
-            stream));
+            GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                info.scores_buffer,
+                d_scores + offset * max_detections,
+                info.batch_size * actual_num_dets * sizeof(float),
+                info.scores_mem_type,
+                stream));
 
-        GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
-            info.classes_buffer,
-            d_classes + offset * max_detections,
-            info.batch_size * max_detections * sizeof(int),
-            info.classes_mem_type,
-            stream));
+            GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                info.classes_buffer,
+                d_classes + offset * max_detections,
+                info.batch_size * actual_num_dets * sizeof(int),
+                info.classes_mem_type,
+                stream));
 
-        GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
-            info.detection_masks_buffer,
-            d_detection_masks + offset * max_detections * proto_h * proto_w,
-            info.batch_size * max_detections * proto_h * proto_w * sizeof(float),
-            info.detection_masks_mem_type,
-            stream));
+            GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                info.detection_masks_buffer,
+                d_detection_masks + offset * max_detections * proto_h * proto_w,
+                info.batch_size * actual_num_dets * proto_h * proto_w * sizeof(float),
+                info.detection_masks_mem_type,
+                stream));
 
-        GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
-            info.mask_offsets_buffer,
-            d_mask_offsets + offset * max_detections,
-            info.batch_size * max_detections * sizeof(int),
-            info.mask_offsets_mem_type,
-            stream));
+            GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                info.mask_shapes_buffer,
+                d_mask_shapes + offset * max_detections * 2,
+                info.batch_size * actual_num_dets * 2 * sizeof(int),
+                info.mask_shapes_mem_type,
+                stream));
+        }
 
-        GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
-            info.mask_shapes_buffer,
-            d_mask_shapes + offset * max_detections * 2,
-            info.batch_size * max_detections * 2 * sizeof(int),
-            info.mask_shapes_mem_type,
-            stream));
+        // mask_offsets 需要重新计算为相对偏移：每个检测框在 sample 内 mask buffer 中的位置
+        if (actual_num_dets > 0 && info.mask_offsets_buffer != nullptr)
+        {
+            if (info.mask_offsets_mem_type == TRITONSERVER_MEMORY_CPU)
+            {
+                for (int b = 0; b < info.batch_size; ++b)
+                {
+                    int *dst = static_cast<int *>(info.mask_offsets_buffer) +
+                               b * actual_num_dets;
+                    for (int d = 0; d < actual_num_dets; ++d)
+                    {
+                        dst[d] = d * proto_h * proto_w;
+                    }
+                }
+            }
+            else
+            {
+                // GPU buffer：通过 cudaMemcpyAsync 从临时 host buffer 拷贝
+                std::vector<int> host_offsets(info.batch_size * actual_num_dets);
+                for (int b = 0; b < info.batch_size; ++b)
+                {
+                    for (int d = 0; d < actual_num_dets; ++d)
+                    {
+                        host_offsets[b * actual_num_dets + d] = d * proto_h * proto_w;
+                    }
+                }
+                cudaError_t merr = cudaMemcpyAsync(
+                    info.mask_offsets_buffer, host_offsets.data(),
+                    host_offsets.size() * sizeof(int),
+                    cudaMemcpyHostToDevice, stream);
+                if (merr != cudaSuccess)
+                {
+                    guard.SetError(TRITONSERVER_ErrorNew(
+                        TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(merr)));
+                    return nullptr;
+                }
+            }
+        }
     }
 
     // 8. 记录 CUDA event，将响应发送交给后台线程
