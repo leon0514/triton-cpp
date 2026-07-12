@@ -1,0 +1,5 @@
+# Triton 按需加载模型列表
+# 每行一个 ensemble 模型名，# 开头为注释
+classifier_ensemble
+yolo11_ensemble
+labels

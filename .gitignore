@@ -82,3 +82,5 @@ tests/output_*.png
 # fronted
 triton-display/frontend/dist/
 triton-display/frontend/node_modules/
+# Local environment configuration
+.env

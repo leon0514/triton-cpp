@@ -33,15 +33,18 @@ services:
       - "48000:8000"   # HTTP
       - "48001:8001"   # gRPC
       - "48002:8002"   # Metrics
+    env_file:
+      - .env
     volumes:
       # Model repository (config.pbtxt + backend .so + model plan)
       - ./workspace/models:/models:ro
+      # On-demand loading entrypoint script
+      - ./workspace/triton_entrypoint.sh:/triton_entrypoint.sh:ro
+      # On-demand loading model list (one model per line)
+      - ./workspace/models_to_load.txt:/models_to_load.txt:ro
     command:
-      - tritonserver
-      - --model-repository=/models
-      - --log-verbose=1
-      - --exit-on-error=false
-      - --strict-readiness=false
+      - /bin/bash
+      - /triton_entrypoint.sh
     deploy:
       resources:
         reservations:

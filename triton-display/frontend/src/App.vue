@@ -2,7 +2,7 @@
   <div class="app">
     <header class="header">
       <h1>🚀 Triton Display</h1>
-      <span class="subtitle">目标检测 / OBB / Pose / Seg 可视化</span>
+      <span class="subtitle">目标检测 / OBB / Pose / Seg / 分类 可视化</span>
     </header>
 
     <div class="main">
@@ -37,44 +37,46 @@
           />
         </section>
 
-        <section class="panel">
-          <h3>置信度阈值</h3>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            v-model.number="confThreshold"
-          />
-          <div class="value">{{ confThreshold.toFixed(2) }}</div>
-        </section>
+        <template v-if="modelType !== 'classifier'">
+          <section class="panel">
+            <h3>置信度阈值</h3>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              v-model.number="confThreshold"
+            />
+            <div class="value">{{ confThreshold.toFixed(2) }}</div>
+          </section>
 
-        <section class="panel">
-          <h3>显示选项</h3>
-          <label><input type="checkbox" v-model="showBoxes" /> 检测框</label>
-          <label><input type="checkbox" v-model="showLabels" /> 标签</label>
-          <label><input type="checkbox" v-model="showScores" /> 分数</label>
-          <label><input type="checkbox" v-model="showPose" /> 姿态骨架</label>
-          <label><input type="checkbox" v-model="showSeg" /> 分割 Mask</label>
-        </section>
+          <section class="panel">
+            <h3>显示选项</h3>
+            <label><input type="checkbox" v-model="showBoxes" /> 检测框</label>
+            <label><input type="checkbox" v-model="showLabels" /> 标签</label>
+            <label><input type="checkbox" v-model="showScores" /> 分数</label>
+            <label><input type="checkbox" v-model="showPose" /> 姿态骨架</label>
+            <label><input type="checkbox" v-model="showSeg" /> 分割 Mask</label>
+          </section>
 
-        <section class="panel">
-          <h3>标签过滤</h3>
-          <div class="label-list">
-            <label v-for="label in availableLabels" :key="label.id">
-              <input
-                type="checkbox"
-                :value="label.id"
-                v-model="selectedLabels"
-              />
-              <span
-                class="color-dot"
-                :style="{ backgroundColor: label.color }"
-              ></span>
-              {{ label.name }}
-            </label>
-          </div>
-        </section>
+          <section class="panel">
+            <h3>标签过滤</h3>
+            <div class="label-list">
+              <label v-for="label in availableLabels" :key="label.id">
+                <input
+                  type="checkbox"
+                  :value="label.id"
+                  v-model="selectedLabels"
+                />
+                <span
+                  class="color-dot"
+                  :style="{ backgroundColor: label.color }"
+                ></span>
+                {{ label.name }}
+              </label>
+            </div>
+          </section>
+        </template>
 
         <section class="panel">
           <button
@@ -89,7 +91,14 @@
       </aside>
 
       <div class="content">
+        <ClassResult
+          v-if="modelType === 'classifier'"
+          :result="result"
+          :class-names="classNames"
+          :image-src="imageUrl"
+        />
         <CanvasViewer
+          v-else
           :image-src="imageUrl"
           :detections="filteredDetections"
           :model-type="modelType"
@@ -117,6 +126,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import CanvasViewer from './components/CanvasViewer.vue'
+import ClassResult from './components/ClassResult.vue'
 import { fetchModels, fetchLabels, infer } from './api'
 
 const models = ref([])
@@ -143,6 +153,7 @@ function getLabelName(classId) {
 
 const modelType = computed(() => {
   const name = selectedModel.value.toLowerCase()
+  if (name.includes('classifier')) return 'classifier'
   if (name.includes('obb')) return 'obb'
   if (name.includes('pose')) return 'pose'
   if (name.includes('seg')) return 'seg'
@@ -165,7 +176,7 @@ const availableLabels = computed(() => {
 })
 
 const filteredDetections = computed(() => {
-  if (!result.value) return []
+  if (!result.value?.detections) return []
   return result.value.detections.filter((d) => {
     if (d.score < confThreshold.value) return false
     const name = getLabelName(d.class_id)

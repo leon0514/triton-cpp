@@ -17,9 +17,10 @@
 1. [环境要求](#环境要求)
 2. [编译](#编译)
 3. [启动服务](#启动服务)
-4. [模型配置](#模型配置)
-5. [模型转换](#模型转换)
-6. [测试](#测试)
+4. [模型操作](#模型操作)
+5. [模型配置](#模型配置)
+6. [模型转换](#模型转换)
+7. [测试](#测试)
 
 ---
 
@@ -117,7 +118,47 @@ curl -s http://localhost:48000/v2/health/ready
 docker logs triton-backends --tail 80
 ```
 
-### 2. 启动可视化前端（可选）
+### 2. 按需加载模型（可选）
+
+默认情况下 Triton 会加载模型仓库里的全部模型。如果希望只加载部分模型，推荐通过 `workspace/models_to_load.txt` 配置，每行一个模型名，支持 `#` 注释，加载很多模型时更直观：
+
+```text
+# workspace/models_to_load.txt
+classifier_ensemble
+yolo11_ensemble
+yolo11_pose_ensemble
+yolo11_seg_ensemble
+```
+
+然后在项目根目录的 `.env` 中指定该文件：
+
+```bash
+TRITON_MODELS_FILE=/models_to_load.txt
+```
+
+配置后重启容器即可生效：
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+如果模型数量很少，也可以直接在 `.env` 中用逗号分隔：
+
+```bash
+TRITON_MODELS=classifier_ensemble,yolo11_ensemble
+```
+
+说明：
+- `.env` 文件会被 `docker-compose.yml` 自动加载。
+- `TRITON_MODELS_FILE` 优先级高于 `TRITON_MODELS`。
+- 配置列表中的 ensemble 模型及其依赖（预处理、推理、后处理）会自动加载。
+- `labels` 模型是前端显示类别名依赖的公共服务，启用按需加载时会被自动追加到加载列表，无需手动配置。
+- 未加载的模型在前端 `/api/models` 中会显示为 `ready: false`，无法被选择推理。
+- 启用按需加载后，仍可通过 Triton Model Repository API 手动加载 / 卸载 / 更新模型，详见 [模型操作](#模型操作)。
+- 留空或不配置上述变量时，行为与之前一致：加载所有模型。
+
+### 3. 启动可视化前端（可选）
 
 ```bash
 cd triton-cpp/triton-display
@@ -125,6 +166,83 @@ docker compose up -d --build
 ```
 
 浏览器访问：`http://localhost:8088`
+
+---
+
+## 模型操作
+
+当启用按需加载（`TRITON_MODELS_FILE` 或 `TRITON_MODELS` 非空）时，Triton 会运行在 `--model-control-mode=explicit` 模式下，此时可以通过 **Model Repository API** 在运行时手动管理模型，无需重启容器。
+
+### 1. 查看模型状态
+
+```bash
+curl -s -X POST http://localhost:48000/v2/repository/index \
+  -H 'Content-Type: application/json' \
+  -d '{}' | python3 -m json.tool
+```
+
+返回示例：
+
+```json
+[
+  { "name": "classifier_ensemble", "version": "1", "state": "READY" },
+  { "name": "yolo11_pose_ensemble" }
+]
+```
+
+有 `state: READY` 的表示已加载，其余表示尚未加载。
+
+### 2. 手动加载模型
+
+```bash
+curl -s -X POST http://localhost:48000/v2/repository/models/yolo11_pose_ensemble/load \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+加载后检查就绪状态：
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" \
+  http://localhost:48000/v2/models/yolo11_pose_ensemble/ready
+# 200
+```
+
+### 3. 手动卸载模型
+
+```bash
+curl -s -X POST http://localhost:48000/v2/repository/models/yolo11_pose_ensemble/unload \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+卸载后该模型即不可推理，GPU 显存会被释放。
+
+### 4. 更新模型（热重载）
+
+当替换了某个模型的文件（例如更新了 `workspace/models/classifier/1/model.plan`）后，需要先卸载再加载，使 Triton 重新读取最新文件：
+
+```bash
+MODEL=yolo11_pose_ensemble
+
+curl -s -X POST http://localhost:48000/v2/repository/models/$MODEL/unload \
+  -H 'Content-Type: application/json' -d '{}'
+
+curl -s -X POST http://localhost:48000/v2/repository/models/$MODEL/load \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+> 注意：直接覆盖模型仓库中的文件不会自动生效，必须执行 unload + load。
+
+### 5. 完全手动管理
+
+如果你希望启动时不加载任何模型，全部通过 API 手动控制，可以在 `workspace/models_to_load.txt` 中只保留 `labels`：
+
+```text
+labels
+```
+
+这样 Triton 启动后仅加载 `labels` 公共服务，其它模型按需通过上述 API 加载。
 
 ---
 

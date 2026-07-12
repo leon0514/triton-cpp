@@ -268,6 +268,30 @@ target_compile_options(triton_rfdetr_postprocess PRIVATE
 )
 target_link_libraries(triton_rfdetr_postprocess CUDA::cudart Threads::Threads)
 
+# -------------------- Classifier postprocess backend --------------------
+set(CLASSIFIER_POSTPROCESS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/classifier_postprocess/classifier_postprocess_kernel.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/classifier_postprocess/classifier_postprocess_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/classifier_postprocess/triton_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/classifier_postprocess/triton_backend.cpp
+)
+
+add_library(triton_classifier_postprocess SHARED ${CLASSIFIER_POSTPROCESS_SOURCES} ${COMMON_SOURCES})
+set_target_properties(triton_classifier_postprocess PROPERTIES
+    OUTPUT_NAME "triton_classifier_postprocess"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    POSITION_INDEPENDENT_CODE ON
+)
+if(CMAKE_CUDA_ARCHITECTURES)
+    set_property(TARGET triton_classifier_postprocess PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
+endif()
+target_compile_options(triton_classifier_postprocess PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+)
+target_link_libraries(triton_classifier_postprocess CUDA::cudart Threads::Threads)
+
 # Triton backend libraries
 if(TRITON_DIR)
     find_library(TRITON_BACKEND_API_LIB
@@ -290,6 +314,7 @@ if(TRITON_DIR)
         target_link_libraries(triton_yolov5_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_yolo26_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_rfdetr_postprocess ${TRITON_BACKEND_API_LIB})
+        target_link_libraries(triton_classifier_postprocess ${TRITON_BACKEND_API_LIB})
     endif()
     if(TRITON_SERVER_API_LIB)
         target_link_libraries(triton_preprocess ${TRITON_SERVER_API_LIB})
@@ -300,9 +325,10 @@ if(TRITON_DIR)
         target_link_libraries(triton_yolov5_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_yolo26_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_rfdetr_postprocess ${TRITON_SERVER_API_LIB})
+        target_link_libraries(triton_classifier_postprocess ${TRITON_SERVER_API_LIB})
     endif()
 endif()
 
-install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolo11_seg_postprocess triton_yolov5_postprocess triton_yolo26_postprocess triton_rfdetr_postprocess
+install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolo11_seg_postprocess triton_yolov5_postprocess triton_yolo26_postprocess triton_rfdetr_postprocess triton_classifier_postprocess
     LIBRARY DESTINATION lib
 )
