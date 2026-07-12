@@ -529,18 +529,26 @@ curl -s http://localhost:48000/v2/health/live
 
 ### 2. 运行 Python 测试
 
+`triton_client` 目录下保留了基于封装客户端的示例和测试脚本：
+
 ```bash
 cd workspace/triton_client
 
-# 动态输出回归测试
-python3 all_dynamic_test.py
+# 单元测试（无需 Triton 服务）
+python3 test_client.py
 
-# 分割测试
-python3 seg_test.py
+# 集成测试（需要本地 Triton 服务正在运行）
+python3 test_client.py --integration
 
-# 循环稳定性测试
-python3 loop_test.py
+# 三协议调用示例
+python3 example.py --protocol grpc
+python3 example.py --protocol http
+python3 example.py --protocol shm
 ```
+
+更多客户端用法详见 [`workspace/triton_client/README.md`](workspace/triton_client/README.md)。
+
+更完整的模型推理与可视化示例（含 gRPC/HTTP/SHM 三协议）见 [`workspace/examples/README.md`](workspace/examples/README.md)。
 
 ### 3. 可视化前端
 
