@@ -1,115 +1,560 @@
-# 构建与部署
+# Triton 自定义后端部署指南
+
+本项目实现了多个 GPU 加速的 Triton Inference Server 自定义后端：
+
+- `preprocess`：图像预处理（resize、letterbox、归一化、仿射变换矩阵）。
+- `yolo11_postprocess` / `yolo11_obb_postprocess` / `yolo11_pose_postprocess` / `yolo11_seg_postprocess`：YOLO11 系列检测 / OBB / 姿态 / 分割后处理。
+- `yolov5_postprocess`：YOLOv5 检测后处理。
+- `yolo26_postprocess`：YOLO26 one-to-one 检测头后处理。
+- `rfdetr_postprocess`：RF-DETR 后处理。
+
+模型仓库位于 `workspace/models/`，所有自定义后端 `.so` 都嵌在对应模型的 `1/` 目录下，通过 `docker-compose.yml` 一键启动。
+
+---
+
+## 目录
+
+1. [环境要求](#环境要求)
+2. [编译](#编译)
+3. [启动服务](#启动服务)
+4. [模型配置](#模型配置)
+5. [模型转换](#模型转换)
+6. [测试](#测试)
+
+---
+
+## 环境要求
+
+- NVIDIA Docker / Docker Compose
+- NVIDIA Container Toolkit（`--gpus all` 需要）
+- 镜像：`nvcr.io/nvidia/tritonserver:25.01-py3`
+- CUDA architectures：`80;86;89`（可在 `build.sh` 中通过 `CUDA_ARCHS` 覆盖）
+
+---
 
 ## 编译
 
-**必须使用 Triton SDK 镜像进行编译。** 运行时镜像（如 `nvcr.io/nvidia/tritonserver:25.01-py3`）不包含后端开发头文件 `triton/core/tritonbackend.h`，无法编译自定义后端。
+### 1. 使用 Docker 编译（推荐）
 
-推荐使用官方 SDK 镜像，通过 `-v` 挂载本地源码：
+项目根目录下执行：
 
 ```bash
-# 进入项目根目录
 cd triton-cpp
 
-# 启动 SDK 容器并挂载当前目录到 /workspace
-docker run --rm -it --gpus all \
-    -v $(pwd):/workspace \
-    -w /workspace \
-    nvcr.io/nvidia/tritonserver:25.01-py3 \
-    bash build.sh
+docker run --rm --gpus all \
+  -v "$(pwd)":/workspace \
+  nvcr.io/nvidia/tritonserver:25.01-py3 \
+  bash /workspace/build.sh
 ```
 
-构建产物位于 `build/libtriton_preprocess.so`、`build/libtriton_yolo11_postprocess.so`、`build/libtriton_yolo11_pose_postprocess.so`、`build/libtriton_yolo11_obb_postprocess.so`、`build/libtriton_yolov5_postprocess.so`，分别对应五个后端。
+说明：
+- 运行时镜像已包含 Triton backend 头文件和 CUDA toolkit，可直接编译。
+- 编译产物输出到 `build/` 目录：
+  ```
+  build/libtriton_preprocess.so
+  build/libtriton_yolo11_postprocess.so
+  build/libtriton_yolo11_obb_postprocess.so
+  build/libtriton_yolo11_pose_postprocess.so
+  build/libtriton_yolo11_seg_postprocess.so
+  build/libtriton_yolov5_postprocess.so
+  build/libtriton_yolo26_postprocess.so
+  build/libtriton_rfdetr_postprocess.so
+  ```
 
-## 部署
-
-将构建产物和模型配置拷贝到 Triton 模型仓库的 backend 目录：
+### 2. 复制产物到模型仓库
 
 ```bash
-# 方式一：作为独立 backend
-mkdir -p /opt/tritonserver/backends/preprocess
-cp build/libtriton_preprocess.so /opt/tritonserver/backends/preprocess/
-cp -r workspace/models/preprocess <model_repository>/
-
-# 方式二：放在模型版本目录下（backend 名称为 preprocess）
-mkdir -p <model_repository>/preprocess/1
-cp build/libtriton_preprocess.so <model_repository>/preprocess/1/
-cp workspace/models/preprocess/config.pbtxt <model_repository>/preprocess/
-
-# YOLO11-OBB 后处理示例
-mkdir -p <model_repository>/yolo11_obb_postprocess/1
-cp build/libtriton_yolo11_obb_postprocess.so <model_repository>/yolo11_obb_postprocess/1/
-cp workspace/models/yolo11_obb_postprocess/config.pbtxt <model_repository>/yolo11_obb_postprocess/
+cp build/libtriton_preprocess.so workspace/models/preprocess/1/
+cp build/libtriton_preprocess.so workspace/models/preprocess_rfdetr/1/
+cp build/libtriton_yolo11_postprocess.so workspace/models/yolo11_postprocess/1/
+cp build/libtriton_yolo11_obb_postprocess.so workspace/models/yolo11_obb_postprocess/1/
+cp build/libtriton_yolo11_pose_postprocess.so workspace/models/yolo11_pose_postprocess/1/
+cp build/libtriton_yolo11_seg_postprocess.so workspace/models/yolo11_seg_postprocess/1/
+cp build/libtriton_yolov5_postprocess.so workspace/models/yolov5_postprocess/1/
+cp build/libtriton_yolo26_postprocess.so workspace/models/yolo26_postprocess/1/
+cp build/libtriton_rfdetr_postprocess.so workspace/models/rfdetr_postprocess/1/
 ```
 
-启动 Triton：
+### 3. 自定义 CUDA 架构
 
 ```bash
-tritonserver --model-repository <model_repository>
+CUDA_ARCHS="80;86;89" ./build.sh
 ```
 
-## 配置参数说明
+或在容器内：
 
-`workspace/models/preprocess/config.pbtxt` 中通过 `parameters` 字段配置预处理行为：
+```bash
+CUDA_ARCHS="80;86;89" bash /workspace/build.sh
+```
 
-| 参数 | 类型 | 说明 | 示例 |
-|------|------|------|------|
-| `target_width` | int | 目标宽度 | `640` |
-| `target_height` | int | 目标高度 | `640` |
-| `resize_type` | string | `direct` 直接缩放 / `letterbox`  letterbox | `letterbox` |
-| `output_type` | string | `FP32` / `FP16` | `FP32` |
-| `norm_type` | string | `none` / `mean_std` / `alpha_beta` | `mean_std` |
-| `mean` | float[3] | mean_std 归一化的 mean | `[0.485, 0.456, 0.406]` |
-| `std` | float[3] | mean_std 归一化的 std | `[0.229, 0.224, 0.225]` |
-| `alpha` | float | mean_std 的缩放因子 / alpha_beta 的 alpha | `0.00392156862745098` |
-| `beta` | float | alpha_beta 的 beta | `0.0` |
-| `channel_type` | string | `none` / `swap_rb`（输入 BGR，输出 RGB） | `swap_rb` |
-| `fill_value` | float[3] | letterbox 填充色 BGR | `[114.0, 114.0, 114.0]` |
-| `output_transform` | bool | 是否输出 d2i 变换矩阵 | `true` |
+---
 
-### YOLO11-OBB 后处理参数
+## 启动服务
 
-`workspace/models/yolo11_obb_postprocess/config.pbtxt` 参数与 YOLO11 检测后处理类似，区别如下：
+### 1. 启动 Triton Inference Server
 
-- `num_classes`：DOTA 数据集默认为 `15`。
-- `output_format`：`channel_first` 对应 `[20, 8400]`（4 box + 1 angle + 15 classes）。
-- `score_activation`：原版 Ultralytics ONNX 导出时类别分支已经过 Sigmoid，需设置为 `none`。
-- 输出 `detection_boxes` 维度为 `[300, 5]`，格式 `[cx, cy, w, h, angle]`（angle 为弧度）。
-- NMS 使用基于 Sutherland-Hodgman 多边形裁剪的精确旋转 IoU（Skew IoU），而非外接矩形近似，减少倾斜/密集目标漏检。
+```bash
+cd triton-cpp
+docker compose up -d
+```
 
-## 输入输出
+默认端口映射：
+- HTTP：`48000 -> 8000`
+- gRPC：`48001 -> 8001`
+- Metrics：`48002 -> 8002`
 
-配置文件遵循 Triton 动态 Batch 契约（`max_batch_size > 0`），声明的是**单张图像**的维度：
+检查服务是否就绪：
 
-- 输入：`raw_image`，`TYPE_UINT8`，声明形状 `[H, W, 3]`，运行时可能为 `[N, H, W, 3]`，BGR 顺序。
-- 输出：`preprocessed_output`，`TYPE_FP32/FP16`，声明形状 `[3, target_height, target_width]`，运行时实际返回 `[N, 3, target_height, target_width]`。
-- 输出：`transform_metadata`，`TYPE_FP32`，声明形状 `[6]`，运行时实际返回 `[N, 6]`，为 `d2i` 仿射逆变换矩阵，用于将网络坐标映射回原图坐标。
+```bash
+curl -s http://localhost:48000/v2/health/ready
+```
 
-其中 `N` 是当前 request 的实际 batch size，由后端根据输入动态确定，**绝不能硬编码为 1**。
+返回空且 HTTP 200 表示就绪。
 
-## 实现要点
+查看模型状态：
 
-### 1. 动态 Batch 与单次 Kernel Launch
-`config.pbtxt` 中设置 `max_batch_size: 16`，输入/输出 dims 声明单张图维度。
+```bash
+docker logs triton-backends --tail 80
+```
 
-`TRITONBACKEND_ModelInstanceExecute` 收集所有 request 的图像（支持每个 request 内部再带 batch 维度 `[N, H, W, 3]`），通过 3D CUDA Grid（x/y 覆盖目标像素，z 覆盖总图像数）单次启动 `warp_affine_batched_kernel`，避免 per-image 循环启动 kernel 的开销。
+### 2. 启动可视化前端（可选）
 
-由于 `max_batch_size > 0`，Triton 会在配置声明维度前隐式追加 batch 维。因此向单个 Response 分配输出时，必须使用运行时 4-D 形状 `[N, 3, H, W]` 和 2-D 形状 `[N, 6]`，其中 `N` 取当前 request 的 `batch_size`，确保声明形状与 buffer 字节数严格对齐。
+```bash
+cd triton-cpp/triton-display
+docker compose up -d --build
+```
 
-### 2. Host 输入数据安全
-对于仍在 Host 的输入，不再复用单个 device buffer，而是为每次 Execute 分配一块独立的连续 device workspace，并按顺序将每张图拷贝到不同 offset。配合 `CompletionTask` 持有 workspace 所有权，保证 GPU 使用期间不会被后续 Execute 覆盖或提前释放。
+浏览器访问：`http://localhost:8088`
 
-### 3. 异步响应恢复 Triton 流水线
-`Execute` 函数不再调用 `cudaStreamSynchronize` 阻塞调度线程。GPU 完成后通过 `cudaEvent` 通知后台完成线程，由该线程负责调用 `TRITONBACKEND_ResponseSend`。`Execute` 提交任务后立即返回，使 Triton 可以并发调度下一个 batch。
+---
 
-### 4. Workspace 生命周期管理
-每次 Execute 的 `input_workspace`、`output_workspace`、`transform_workspace` 随 `CompletionTask` 移动到后台线程，待 `cudaEventSynchronize` 确认 GPU 完成后，任务析构自动释放 device 内存，避免跨 batch 的数据竞争。
+## 模型配置
 
-### 5. 异常路径下的 Request 防挂起（RAII ResponseGuard）
-Triton 要求每个进入 `ModelInstanceExecute` 的 Request 必须有且仅有一次 `ResponseSend`。任何中途错误（如显存分配失败、输出 buffer 分配失败、CUDA 拷贝失败）都不得直接 `return` 退出。
+模型仓库结构如下（每个模型一个目录，`config.pbtxt` 描述输入输出）：
 
-`triton_backend.cpp` 中实现了 `ResponseGuard` RAII 守卫：
-- 在 `infos` 之后声明，析构顺序上先于 `infos`
-- 正常路径成功提交后台任务后调用 `Commit()`，析构时不再动作
-- 异常路径下，`guard.SetError()` 记录错误并 `return nullptr`，触发 `ResponseGuard` 析构
-- 析构时遍历所有未发送或已创建但未成功完成的 Response
-- **关键**：`TRITONBACKEND_ResponseSend` 会接管 error 所有权，不能将同一个 error 指针重复传给多个 ResponseSend。`ResponseGuard` 在循环内部通过 `TRITONSERVER_ErrorCode` / `TRITONSERVER_ErrorMessage` 为每个请求**克隆独立的错误对象**，分别传入 ResponseSend；循环结束后再安全释放原始 `error_`
+```
+workspace/models/
+├── preprocess/
+│   ├── config.pbtxt
+│   └── 1/libtriton_preprocess.so
+├── yolo11/
+│   ├── config.pbtxt
+│   └── 1/model.plan
+├── yolo11_postprocess/
+│   ├── config.pbtxt
+│   └── 1/libtriton_yolo11_postprocess.so
+├── yolo11_ensemble/config.pbtxt
+├── labels/
+│   ├── config.pbtxt
+│   └── 1/model.py
+└── ...
+```
+
+### 1. 预处理配置（`preprocess/config.pbtxt`）
+
+```protobuf
+name: "preprocess"
+backend: "preprocess"
+max_batch_size: 16
+
+input [
+  {
+    name: "raw_image"
+    data_type: TYPE_UINT8
+    dims: [-1, -1, 3]
+  }
+]
+
+output [
+  { name: "preprocessed_output", data_type: TYPE_FP32, dims: [3, 640, 640] },
+  { name: "transform_metadata", data_type: TYPE_FP32, dims: [6] }
+]
+
+parameters: {
+  key: "target_width"    value: { string_value: "640" }
+}
+parameters: {
+  key: "target_height"   value: { string_value: "640" }
+}
+parameters: {
+  key: "resize_type"     value: { string_value: "letterbox" }
+}
+parameters: {
+  key: "output_type"     value: { string_value: "FP32" }
+}
+parameters: {
+  key: "norm_type"       value: { string_value: "alpha_beta" }
+}
+parameters: {
+  key: "alpha"           value: { string_value: "0.00392156862745098" }
+}
+parameters: {
+  key: "beta"            value: { string_value: "0.0" }
+}
+parameters: {
+  key: "channel_type"    value: { string_value: "none" }
+}
+parameters: {
+  key: "fill_value"      value: { string_value: "[114.0, 114.0, 114.0]" }
+}
+parameters: {
+  key: "output_transform" value: { string_value: "true" }
+}
+```
+
+参数说明：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `target_width` / `target_height` | int | 目标尺寸 |
+| `resize_type` | string | `direct` 直接缩放 / `letterbox` 等比缩放并填充 |
+| `output_type` | string | `FP32` / `FP16` |
+| `norm_type` | string | `none` / `mean_std` / `alpha_beta` |
+| `alpha` / `beta` | float | `alpha_beta` 归一化参数：`x * alpha + beta` |
+| `mean` / `std` | float[3] | `mean_std` 归一化参数 |
+| `channel_type` | string | `none` / `swap_rb`（BGR -> RGB） |
+| `fill_value` | float[3] | letterbox 填充色（BGR） |
+| `output_transform` | bool | 是否输出 `d2i` 逆变换矩阵 |
+
+### 2. 检测后处理配置（`yolo11_postprocess/config.pbtxt`）
+
+```protobuf
+name: "yolo11_postprocess"
+backend: "yolo11_postprocess"
+max_batch_size: 16
+
+input [
+  { name: "model_output", data_type: TYPE_FP32, dims: [84, 8400] }
+]
+
+output [
+  { name: "num_dets",          data_type: TYPE_INT32, dims: [1] },
+  { name: "detection_boxes",   data_type: TYPE_FP32, dims: [-1, 4] },
+  { name: "detection_scores",  data_type: TYPE_FP32, dims: [-1] },
+  { name: "detection_classes", data_type: TYPE_INT32, dims: [-1] }
+]
+
+parameters: {
+  key: "num_classes"          value: { string_value: "80" }
+}
+parameters: {
+  key: "confidence_threshold" value: { string_value: "0.25" }
+}
+parameters: {
+  key: "iou_threshold"        value: { string_value: "0.45" }
+}
+parameters: {
+  key: "max_detections"       value: { string_value: "300" }
+}
+parameters: {
+  key: "max_candidates"       value: { string_value: "8400" }
+}
+parameters: {
+  key: "output_format"        value: { string_value: "channel_first" }
+}
+parameters: {
+  key: "score_activation"     value: { string_value: "none" }
+}
+```
+
+参数说明：
+
+| 参数 | 说明 |
+|------|------|
+| `num_classes` | 类别数 |
+| `confidence_threshold` | 置信度阈值 |
+| `iou_threshold` | NMS IoU 阈值 |
+| `max_detections` | 每图最多保留检测数 |
+| `max_candidates` | 进入 NMS 的候选数上限 |
+| `output_format` | `channel_first`（`[C, N]`）或 `anchor_first`（`[N, C]`） |
+| `score_activation` | `none` / `sigmoid` |
+
+### 3. 各后处理模型输出维度对照
+
+| 模型 | 输入名 | 输入维度 | 输出 |
+|------|--------|----------|------|
+| `yolo11_postprocess` | `model_output` | `[84, 8400]` | `num_dets`, `detection_boxes[-1,4]`, `detection_scores[-1]`, `detection_classes[-1]` |
+| `yolo11_obb_postprocess` | `model_output` | `[20, 8400]` | 同上，但 `detection_boxes[-1,5]`（含 angle） |
+| `yolo11_pose_postprocess` | `model_output` | `[56, 8400]` | 同上 + `detection_keypoints[-1,17,3]` |
+| `yolo11_seg_postprocess` | `model_output`, `mask_protos` | `[116, 8400]`, `[32, 160, 160]` | 同上 + `detection_masks[-1]`, `mask_offsets[-1]`, `mask_shapes[-1,2]` |
+| `yolov5_postprocess` | `model_output` | `[25200, 85]` | 同 `yolo11_postprocess` |
+| `yolo26_postprocess` | `model_output` | `[300, 6]` | 同 `yolo11_postprocess` |
+| `rfdetr_postprocess` | `dets`, `labels` | `[300, 4]`, `[300, 91]` | 同 `yolo11_postprocess` |
+
+### 4. Ensemble 配置示例（`yolo11_ensemble/config.pbtxt`）
+
+```protobuf
+name: "yolo11_ensemble"
+platform: "ensemble"
+max_batch_size: 16
+
+input [
+  { name: "raw_image", data_type: TYPE_UINT8, dims: [-1, -1, 3] }
+]
+
+output [
+  { name: "num_dets",          data_type: TYPE_INT32, dims: [1] },
+  { name: "detection_boxes",   data_type: TYPE_FP32, dims: [-1, 4] },
+  { name: "detection_scores",  data_type: TYPE_FP32, dims: [-1] },
+  { name: "detection_classes", data_type: TYPE_INT32, dims: [-1] },
+  { name: "transform_metadata", data_type: TYPE_FP32, dims: [6] }
+]
+
+ensemble_scheduling {
+  step [
+    {
+      model_name: "preprocess"
+      input_map { key: "raw_image" value: "raw_image" }
+      output_map { key: "preprocessed_output" value: "preprocessed_output" }
+      output_map { key: "transform_metadata" value: "transform_metadata" }
+    },
+    {
+      model_name: "yolo11"
+      input_map { key: "images" value: "preprocessed_output" }
+      output_map { key: "output0" value: "output0" }
+    },
+    {
+      model_name: "yolo11_postprocess"
+      input_map { key: "model_output" value: "output0" }
+      output_map { key: "num_dets" value: "num_dets" }
+      output_map { key: "detection_boxes" value: "detection_boxes" }
+      output_map { key: "detection_scores" value: "detection_scores" }
+      output_map { key: "detection_classes" value: "detection_classes" }
+    }
+  ]
+}
+```
+
+### 5. 标签服务配置（`labels/config.pbtxt`）
+
+```protobuf
+name: "labels"
+backend: "python"
+max_batch_size: 0
+
+input [
+  { name: "model_name", data_type: TYPE_STRING, dims: [1] }
+]
+output [
+  { name: "labels", data_type: TYPE_STRING, dims: [-1] }
+]
+
+parameters: {
+  key: "names_directory"
+  value: { string_value: "/models/labels/names" }
+}
+```
+
+标签文件放在 `workspace/models/labels/names/<model_name>.txt`，每行一个类别名。
+
+---
+
+## 模型转换
+
+通用流程：**PyTorch `.pt` -> ONNX -> TensorRT `.plan`**。
+
+转换需要进入 Triton 容器或本地具备 `ultralytics`、`onnx`、`tensorrt` / `trtexec` 的环境。
+
+### 1. YOLO11 检测
+
+```bash
+cd workspace/models/yolo11/1
+
+# 1) PT -> ONNX
+python3 - <<PY
+from ultralytics import YOLO
+model = YOLO("yolo11n.pt")
+model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
+PY
+
+# 2) ONNX -> TensorRT plan
+trtexec --onnx=yolo11n.onnx \
+  --saveEngine=model.plan \
+  --fp16 \
+  --minShapes=images:1x3x640x640 \
+  --optShapes=images:1x3x640x640 \
+  --maxShapes=images:16x3x640x640
+```
+
+### 2. YOLO11-Pose
+
+```bash
+cd workspace/models/yolo11_pose/1
+
+python3 - <<PY
+from ultralytics import YOLO
+model = YOLO("yolo11n-pose.pt")
+model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
+PY
+
+trtexec --onnx=yolo11n-pose.onnx \
+  --saveEngine=model.plan \
+  --fp16 \
+  --minShapes=images:1x3x640x640 \
+  --optShapes=images:1x3x640x640 \
+  --maxShapes=images:16x3x640x640
+```
+
+### 3. YOLO11-OBB
+
+```bash
+cd workspace/models/yolo11_obb/1
+
+python3 - <<PY
+from ultralytics import YOLO
+model = YOLO("yolo11n-obb.pt")
+model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
+PY
+
+trtexec --onnx=yolo11n-obb.onnx \
+  --saveEngine=model.plan \
+  --fp16 \
+  --minShapes=images:1x3x640x640 \
+  --optShapes=images:1x3x640x640 \
+  --maxShapes=images:16x3x640x640
+```
+
+### 4. YOLO11-Seg
+
+```bash
+cd workspace/models/yolo11_seg/1
+
+python3 - <<PY
+from ultralytics import YOLO
+model = YOLO("yolo11s-seg.pt")
+model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
+PY
+
+trtexec --onnx=yolo11s-seg.onnx \
+  --saveEngine=model.plan \
+  --fp16 \
+  --minShapes=images:1x3x640x640 \
+  --optShapes=images:1x3x640x640 \
+  --maxShapes=images:16x3x640x640
+```
+
+### 5. YOLOv5
+
+```bash
+cd workspace/models/yolov5/1
+
+python3 - <<PY
+from ultralytics import YOLO
+model = YOLO("yolov5s.pt")
+model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
+PY
+
+# YOLOv5 默认导出为 anchor_first [batch, 25200, 85]
+trtexec --onnx=yolov5s.onnx \
+  --saveEngine=model.plan \
+  --fp16 \
+  --minShapes=images:1x3x640x640 \
+  --optShapes=images:1x3x640x640 \
+  --maxShapes=images:16x3x640x640
+```
+
+后处理 `config.pbtxt` 需配合：
+
+```protobuf
+input [
+  { name: "model_output", data_type: TYPE_FP32, dims: [25200, 85] }
+]
+parameters: {
+  key: "output_format"    value: { string_value: "anchor_first" }
+}
+parameters: {
+  key: "has_objectness"   value: { string_value: "true" }
+}
+parameters: {
+  key: "max_candidates"   value: { string_value: "25200" }
+}
+```
+
+### 6. YOLO26
+
+```bash
+cd workspace/models/yolo26/1
+
+python3 - <<PY
+from ultralytics import YOLO
+model = YOLO("yolo26s.pt")
+model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
+PY
+
+trtexec --onnx=yolo26s.onnx \
+  --saveEngine=model.plan \
+  --fp16 \
+  --minShapes=images:1x3x640x640 \
+  --optShapes=images:1x3x640x640 \
+  --maxShapes=images:16x3x640x640
+```
+
+YOLO26 输出为 `[batch, 300, 6]`，后处理无需 NMS。
+
+### 7. RF-DETR
+
+```bash
+cd workspace/models/rfdetr/1
+
+# 转出onnx具体见官方仓库，目前支持的是不带seg的目标检测版本
+# 注意：RF-DETR ONNX 有两个输出 dets [batch,300,4] 和 labels [batch,300,91]
+trtexec --onnx=rfdetr-small.sim.onnx \
+  --saveEngine=model.plan \
+  --fp16 \
+  --minShapes=images:1x3x512x512 \
+  --optShapes=images:1x3x512x512 \
+  --maxShapes=images:16x3x512x512
+```
+
+RF-DETR 使用独立的预处理 `preprocess_rfdetr`（512x512、ImageNet 归一化、swap_rb）。
+
+### 转换后检查清单
+
+1. `.plan` 文件放在对应模型的 `1/` 目录。
+2. `config.pbtxt` 中的 `dims` 与 ONNX 输出严格一致。
+3. `output_format`（`channel_first` / `anchor_first`）与 ONNX 排布一致。
+4. `score_activation` 与导出时是否做 sigmoid 一致（Ultralytics 默认导出通常已做 sigmoid，填 `none`）。
+5. 若修改了输入分辨率，同步修改 `preprocess` 的 `target_width/target_height` 和后处理 `input_width/input_height`。
+
+---
+
+## 测试
+
+### 1. 健康检查
+
+```bash
+curl -s http://localhost:48000/v2/health/ready
+curl -s http://localhost:48000/v2/health/live
+```
+
+### 2. 运行 Python 测试
+
+```bash
+cd workspace/triton_client
+
+# 动态输出回归测试
+python3 all_dynamic_test.py
+
+# 分割测试
+python3 seg_test.py
+
+# 循环稳定性测试
+python3 loop_test.py
+```
+
+### 3. 可视化前端
+
+浏览器打开 `http://localhost:8088`，选择 ensemble 模型并上传图片。
+
+---
+
+## 常见问题
+
+**Q：构建时报错找不到 `tritonbackend.h`？**  
+A：确保使用 `nvcr.io/nvidia/tritonserver:25.01-py3` 镜像，并在容器内执行 `bash /workspace/build.sh`。
+
+**Q：模型启动时报错 `output shape mismatch`？**  
+A：检查 `config.pbtxt` 中的 `dims` 是否与 TensorRT plan 的实际输出一致，特别注意 `channel_first` 与 `anchor_first`。
+
+**Q：分割模型 mask 看不到或锯齿严重？**  
+A：确认已重新构建并部署 `triton-display` 容器；浏览器需强制刷新（Ctrl+F5）。
