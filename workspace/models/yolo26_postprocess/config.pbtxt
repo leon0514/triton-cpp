@@ -23,17 +23,17 @@ output [
   {
     name: "detection_boxes"
     data_type: TYPE_FP32
-    dims: [300, 4]
+    dims: [-1, 4]
   },
   {
     name: "detection_scores"
     data_type: TYPE_FP32
-    dims: [300]
+    dims: [-1]
   },
   {
     name: "detection_classes"
     data_type: TYPE_INT32
-    dims: [300]
+    dims: [-1]
   }
 ]
 

@@ -12,9 +12,9 @@ input [
 
 output [
   { name: "num_dets", data_type: TYPE_INT32, dims: [1] },
-  { name: "detection_boxes", data_type: TYPE_FP32, dims: [300, 5] },
-  { name: "detection_scores", data_type: TYPE_FP32, dims: [300] },
-  { name: "detection_classes", data_type: TYPE_INT32, dims: [300] },
+  { name: "detection_boxes", data_type: TYPE_FP32, dims: [-1, 5] },
+  { name: "detection_scores", data_type: TYPE_FP32, dims: [-1] },
+  { name: "detection_classes", data_type: TYPE_INT32, dims: [-1] },
   { name: "transform_metadata", data_type: TYPE_FP32, dims: [6] }
 ]
 
