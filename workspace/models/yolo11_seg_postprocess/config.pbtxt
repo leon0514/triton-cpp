@@ -68,6 +68,7 @@ instance_group [
   {
     count: 1
     kind: KIND_GPU
+    gpus: [0]
   }
 ]
 parameters: { key: "num_classes" value: { string_value: "80" } }
