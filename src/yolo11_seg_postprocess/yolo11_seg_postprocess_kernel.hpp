@@ -34,7 +34,7 @@ struct Candidate
  *   - output1:                  [batch, num_masks, proto_h, proto_w]
  *
  * 输出 mask 说明：
- *   对每个保留的检测框，先计算完整 prototype-resolution mask，再裁剪到检测框（proto 坐标系），
+ *   对每个保留的检测框，按 prototype 分辨率计算 mask 并裁剪到检测框（proto 坐标系），
  *   最后按行优先展开并顺序拼接到 detection_masks 中。每个 mask 在 1D buffer 中的起始
  *   偏移写入 detection_mask_offsets，裁剪后的形状写入 detection_mask_shapes。
  *   1D buffer 的总容量为 max_detections * proto_h * proto_w。
@@ -67,8 +67,20 @@ struct Candidate
  *                              （device int[total_images * max_detections]，-1 表示无 mask）
  * @param d_mask_shapes         每张图每个检测框的 mask 形状 (h, w)
  *                              （device int[total_images * max_detections * 2]，0 表示无 mask）
+ * @param d_det_to_cand_idx     每个保留检测框对应的候选框索引（device int[total_images * max_detections]）
+ * @param d_sort_keys_in        CUB 排序输入 key 缓冲区（device float[total_images * max_candidates]）
+ * @param d_sort_keys_out       CUB 排序输出 key 缓冲区（device float[total_images * max_candidates]）
+ * @param d_sort_candidates_in  CUB 排序输入 value 缓冲区（device Candidate[total_images * max_candidates]）
+ * @param d_sort_candidates_out CUB 排序输出 value 缓冲区（device Candidate[total_images * max_candidates]）
+ * @param d_sort_offsets        分段排序偏移（device int[total_images + 1]）
+ * @param d_cub_temp            CUB 临时存储（可为 nullptr 当大小为 0）
+ * @param cub_temp_storage_bytes CUB 临时存储字节数
  * @param stream                CUDA 流
  */
+// 查询 CUB DeviceSegmentedRadixSort 所需临时存储字节数
+size_t get_segmented_sort_temp_storage_bytes(
+    int total_candidates, int num_segments);
+
 void yolo11_seg_postprocess_gpu(
     const void *input,
     const void *mask_protos,
@@ -96,6 +108,14 @@ void yolo11_seg_postprocess_gpu(
     float *d_detection_masks,
     int *d_mask_offsets,
     int *d_mask_shapes,
+    int *d_det_to_cand_idx,
+    float *d_sort_keys_in,
+    float *d_sort_keys_out,
+    Candidate *d_sort_candidates_in,
+    Candidate *d_sort_candidates_out,
+    int *d_sort_offsets,
+    void *d_cub_temp,
+    size_t cub_temp_storage_bytes,
     cudaStream_t stream);
 
 } // namespace yolo11_seg_postprocess

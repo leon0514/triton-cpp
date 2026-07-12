@@ -99,6 +99,18 @@ class Yolo11SegPostprocess
     tensor::Memory<float> detection_masks_workspace_;
     tensor::Memory<int> mask_offsets_workspace_;
     tensor::Memory<int> mask_shapes_workspace_;
+
+    // NMS 后选区到候选框的映射，复用以避免每次 forward 都 cudaMallocAsync
+    tensor::Memory<int> det_to_cand_idx_workspace_;
+
+    // CUB DeviceSegmentedRadixSort 工作区（避免 thrust + 主机同步）
+    tensor::Memory<float> sort_keys_in_workspace_;
+    tensor::Memory<float> sort_keys_out_workspace_;
+    tensor::Memory<Candidate> sort_candidates_in_workspace_;
+    tensor::Memory<Candidate> sort_candidates_out_workspace_;
+    tensor::Memory<int> sort_offsets_workspace_;
+    tensor::Memory<uint8_t> cub_sort_temp_storage_workspace_;
+    size_t cub_sort_temp_storage_bytes_ = 0;
 };
 
 } // namespace yolo11_seg_postprocess

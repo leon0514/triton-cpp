@@ -10,9 +10,7 @@
 #include <cuda_fp16.h>
 #include <float.h>
 
-#include <thrust/sort.h>
-#include <thrust/device_ptr.h>
-#include <thrust/execution_policy.h>
+#include <cub/cub.cuh>
 
 namespace yolo11_seg_postprocess
 {
@@ -236,10 +234,25 @@ __global__ void nms_kernel(
     num_dets[b] = kept;
 }
 
-// 为每个保留检测框生成完整 prototype-resolution mask。
-// 输出布局: [batch, max_detections, proto_h, proto_w]
+// 从候选框中提取 score/key 并复制 value，供 CUB 分段排序使用
+__global__ void prepare_sort_kernel(
+    const Candidate *candidates,
+    int total,
+    float *keys_out,
+    Candidate *values_out)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total)
+        return;
+
+    keys_out[idx]   = candidates[idx].score;
+    values_out[idx] = candidates[idx];
+}
+
+// 将 mask 计算与裁剪合二为一：只计算检测框在 proto 分辨率下的裁剪区域。
+// 每个 block 处理一个 (batch, det)，线程并行遍历裁剪区域内的像素。
 template <typename T>
-__global__ void compute_masks_kernel(
+__global__ void compute_and_crop_masks_kernel(
     const T *input,
     const T *protos,
     const int *num_dets,
@@ -251,61 +264,12 @@ __global__ void compute_masks_kernel(
     int num_masks,
     int proto_h,
     int proto_w,
+    int input_width,
+    int input_height,
     bool anchors_first,
     int max_detections,
     int max_candidates,
-    float *full_masks)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = total_images * max_detections * proto_h * proto_w;
-    if (idx >= total)
-        return;
-
-    int pw = idx % proto_w;
-    int ph = (idx / proto_w) % proto_h;
-    int det = (idx / (proto_h * proto_w)) % max_detections;
-    int b = idx / (max_detections * proto_h * proto_w);
-
-    int nd = num_dets[b];
-    if (det >= nd)
-    {
-        full_masks[idx] = 0.0f;
-        return;
-    }
-
-    int cand_idx = det_to_cand_idx[b * max_detections + det];
-    const Candidate *cand = candidates + b * max_candidates;
-    int anchor_idx = cand[cand_idx].anchor_idx;
-
-    int num_channels = num_classes + 4 + num_masks;
-    float val = 0.0f;
-    for (int m = 0; m < num_masks; ++m)
-    {
-        float coeff = read_output0(
-            input, b, anchor_idx, 4 + num_classes + m,
-            num_anchors, num_channels, anchors_first);
-        float proto_val = read_proto(
-            protos, b, m, ph, pw,
-            num_masks, proto_h, proto_w);
-        val += coeff * proto_val;
-    }
-
-    // sigmoid
-    float mask_val = 1.0f / (1.0f + expf(-val));
-    full_masks[idx] = mask_val;
-}
-
-// 将完整 mask 裁剪到检测框（proto 坐标系），并按行优先展开拼接到 1D buffer。
-__global__ void crop_and_flatten_masks_kernel(
-    const float *full_masks,
-    const int *num_dets,
     const float *boxes,
-    int total_images,
-    int max_detections,
-    int proto_h,
-    int proto_w,
-    int input_width,
-    int input_height,
     float *detection_masks,
     int *mask_offsets,
     int *mask_shapes)
@@ -351,18 +315,45 @@ __global__ void crop_and_flatten_masks_kernel(
     mask_shapes[(b * max_detections + det) * 2 + 0] = crop_h;
     mask_shapes[(b * max_detections + det) * 2 + 1] = crop_w;
 
-    const float *src = full_masks + b * max_detections * proto_h * proto_w + det * proto_h * proto_w;
-    float *dst = detection_masks + out_idx;
+    if (crop_w <= 0 || crop_h <= 0)
+        return;
 
-    // 每个线程处理 crop 区域一个像素
+    int cand_idx = det_to_cand_idx[b * max_detections + det];
+    int anchor_idx = candidates[b * max_candidates + cand_idx].anchor_idx;
+
+    int num_channels = num_classes + 4 + num_masks;
+
+    // 将当前检测框的 mask 系数加载到共享内存，避免重复全局内存读取
+    extern __shared__ float s_coeffs[];
+    for (int i = threadIdx.x; i < num_masks; i += blockDim.x)
+    {
+        s_coeffs[i] = read_output0(
+            input, b, anchor_idx, 4 + num_classes + i,
+            num_anchors, num_channels, anchors_first);
+    }
+    __syncthreads();
+
+    float *dst = detection_masks + out_idx;
     int crop_size = crop_h * crop_w;
+
     for (int tid = threadIdx.x; tid < crop_size; tid += blockDim.x)
     {
         int dy = tid / crop_w;
         int dx = tid % crop_w;
         int sy = y1 + dy;
         int sx = x1 + dx;
-        dst[tid] = src[sy * proto_w + sx];
+
+        float val = 0.0f;
+        for (int m = 0; m < num_masks; ++m)
+        {
+            float proto_val = read_proto(
+                protos, b, m, sy, sx,
+                num_masks, proto_h, proto_w);
+            val += s_coeffs[m] * proto_val;
+        }
+
+        // sigmoid
+        dst[tid] = 1.0f / (1.0f + expf(-val));
     }
 }
 
@@ -433,6 +424,27 @@ __global__ void init_output_kernel(
         num_dets[idx] = 0;
 }
 
+size_t get_segmented_sort_temp_storage_bytes(
+    int total_candidates, int num_segments)
+{
+    size_t bytes = 0;
+    float *d_keys_in = nullptr;
+    float *d_keys_out = nullptr;
+    Candidate *d_candidates_in = nullptr;
+    Candidate *d_candidates_out = nullptr;
+    int *d_offsets = nullptr;
+
+    cub::DeviceSegmentedRadixSort::SortPairsDescending(
+        nullptr, bytes,
+        d_keys_in, d_keys_out,
+        d_candidates_in, d_candidates_out,
+        total_candidates, num_segments,
+        d_offsets, d_offsets + 1,
+        0, sizeof(float) * 8);
+
+    return bytes;
+}
+
 void yolo11_seg_postprocess_gpu(
     const void *input,
     const void *mask_protos,
@@ -460,6 +472,14 @@ void yolo11_seg_postprocess_gpu(
     float *d_detection_masks,
     int *d_mask_offsets,
     int *d_mask_shapes,
+    int *d_det_to_cand_idx,
+    float *d_sort_keys_in,
+    float *d_sort_keys_out,
+    Candidate *d_sort_candidates_in,
+    Candidate *d_sort_candidates_out,
+    int *d_sort_offsets,
+    void *d_cub_temp,
+    size_t cub_temp_storage_bytes,
     cudaStream_t stream)
 {
     if (total_images <= 0 || num_anchors <= 0)
@@ -510,80 +530,64 @@ void yolo11_seg_postprocess_gpu(
         total_images, max_candidates, d_counts);
     checkRuntime(cudaPeekAtLastError());
 
-    // 将候选计数拷贝到主机内存，再按 batch 排序（避免在主机端直接解引用设备指针）
-    std::vector<int> h_counts(total_images);
-    checkRuntime(cudaMemcpyAsync(
-        h_counts.data(), d_counts, total_images * sizeof(int),
-        cudaMemcpyDeviceToHost, stream));
-    checkRuntime(cudaStreamSynchronize(stream));
+    // 使用 CUB DeviceSegmentedRadixSort 在 GPU 上对所有 batch 并行排序，
+    // 避免 thrust::sort 需要的 cudaStreamSynchronize + 主机端循环。
+    int sort_total = total_images * max_candidates;
+    int grid_sort = (sort_total + block - 1) / block;
+    prepare_sort_kernel<<<grid_sort, block, 0, stream>>>(
+        d_candidates, sort_total,
+        d_sort_keys_in, d_sort_candidates_in);
+    checkRuntime(cudaPeekAtLastError());
 
-    for (int b = 0; b < total_images; ++b)
-    {
-        int count = h_counts[b];
-        if (count > 1)
-        {
-            thrust::device_ptr<Candidate> cand_ptr(d_candidates + b * max_candidates);
-            thrust::sort(thrust::cuda::par.on(stream), cand_ptr, cand_ptr + count, CandidateScoreGreater());
-        }
-    }
+    checkRuntime(cub::DeviceSegmentedRadixSort::SortPairsDescending(
+        d_cub_temp, cub_temp_storage_bytes,
+        d_sort_keys_in, d_sort_keys_out,
+        d_sort_candidates_in, d_sort_candidates_out,
+        sort_total,
+        total_images,
+        d_sort_offsets, d_sort_offsets + 1,
+        0, sizeof(float) * 8,
+        stream));
+
+    // 将排序后的候选框复制回 d_candidates，供 NMS 使用
+    checkRuntime(cudaMemcpyAsync(
+        d_candidates, d_sort_candidates_out,
+        sort_total * sizeof(Candidate),
+        cudaMemcpyDeviceToDevice, stream));
 
     // NMS
-    int *d_det_to_cand_idx = nullptr;
-    checkRuntime(cudaMallocAsync(
-        &d_det_to_cand_idx, total_images * max_detections * sizeof(int), stream));
-    checkRuntime(cudaMemsetAsync(
-        d_det_to_cand_idx, 0, total_images * max_detections * sizeof(int), stream));
-
     nms_kernel<<<(total_images + block - 1) / block, block, 0, stream>>>(
         d_candidates, d_counts, total_images, max_candidates, max_detections,
         iou_thresh, d_num_dets, d_boxes, d_scores, d_classes, d_det_to_cand_idx);
     checkRuntime(cudaPeekAtLastError());
 
-    // 计算完整 masks
-    size_t full_mask_bytes = static_cast<size_t>(total_images) * max_detections * proto_h * proto_w * sizeof(float);
-    float *d_full_masks = nullptr;
-    checkRuntime(cudaMallocAsync(&d_full_masks, full_mask_bytes, stream));
-    checkRuntime(cudaMemsetAsync(d_full_masks, 0, full_mask_bytes, stream));
+    // 计算并裁剪 mask：每个 block 处理一个 (batch, det)，只计算裁剪区域内的像素
+    dim3 grid_crop(max_detections, total_images);
+    int shared_mem_bytes = num_masks * sizeof(float);
 
-    int total_mask_pixels = total_images * max_detections * proto_h * proto_w;
-    int grid_mask = (total_mask_pixels + block - 1) / block;
     if (input_is_half)
     {
-        compute_masks_kernel<<<grid_mask, block, 0, stream>>>(
+        compute_and_crop_masks_kernel<<<grid_crop, 256, shared_mem_bytes, stream>>>(
             static_cast<const __half *>(input),
             static_cast<const __half *>(mask_protos),
-            d_num_dets, d_det_to_cand_idx,
-            d_candidates,
+            d_num_dets, d_det_to_cand_idx, d_candidates,
             total_images, num_anchors, num_classes, num_masks,
-            proto_h, proto_w, anchors_first, max_detections,
-            max_candidates,
-            d_full_masks);
+            proto_h, proto_w, input_width, input_height,
+            anchors_first, max_detections, max_candidates,
+            d_boxes, d_detection_masks, d_mask_offsets, d_mask_shapes);
     }
     else
     {
-        compute_masks_kernel<<<grid_mask, block, 0, stream>>>(
+        compute_and_crop_masks_kernel<<<grid_crop, 256, shared_mem_bytes, stream>>>(
             static_cast<const float *>(input),
             static_cast<const float *>(mask_protos),
-            d_num_dets, d_det_to_cand_idx,
-            d_candidates,
+            d_num_dets, d_det_to_cand_idx, d_candidates,
             total_images, num_anchors, num_classes, num_masks,
-            proto_h, proto_w, anchors_first, max_detections,
-            max_candidates,
-            d_full_masks);
+            proto_h, proto_w, input_width, input_height,
+            anchors_first, max_detections, max_candidates,
+            d_boxes, d_detection_masks, d_mask_offsets, d_mask_shapes);
     }
     checkRuntime(cudaPeekAtLastError());
-
-    // 裁剪并展开到 1D buffer
-    dim3 grid_crop(max_detections, total_images);
-    crop_and_flatten_masks_kernel<<<grid_crop, 256, 0, stream>>>(
-        d_full_masks, d_num_dets, d_boxes,
-        total_images, max_detections, proto_h, proto_w,
-        input_width, input_height,
-        d_detection_masks, d_mask_offsets, d_mask_shapes);
-    checkRuntime(cudaPeekAtLastError());
-
-    checkRuntime(cudaFreeAsync(d_full_masks, stream));
-    checkRuntime(cudaFreeAsync(d_det_to_cand_idx, stream));
 }
 
 } // namespace yolo11_seg_postprocess

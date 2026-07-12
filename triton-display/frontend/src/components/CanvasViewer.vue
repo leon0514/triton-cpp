@@ -126,10 +126,12 @@ function drawSeg(det) {
   tmp.height = maskH
   const tctx = tmp.getContext('2d')
   const imgData = tctx.createImageData(maskW, maskH)
+  // 提高不透明度，让分割效果更明显；mask 值通常是 0~1 的概率
+  const alphaScale = 0.75
   for (let y = 0; y < maskH; y++) {
     for (let x = 0; x < maskW; x++) {
       const idx = (y * maskW + x) * 4
-      const alpha = mask[y][x] * 0.5
+      const alpha = Math.min(1, Math.max(0, mask[y][x])) * alphaScale
       imgData.data[idx] = r
       imgData.data[idx + 1] = g
       imgData.data[idx + 2] = b
@@ -140,6 +142,7 @@ function drawSeg(det) {
 
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
+  ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(tmp, x1p, y1p, boxW, boxH)
   ctx.restore()
 }
