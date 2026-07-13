@@ -2,12 +2,12 @@
 
 本项目实现了多个 GPU 加速的 Triton Inference Server 自定义后端：
 
-- `preprocess`：图像预处理（resize、letterbox、归一化、仿射变换矩阵）。
-- `yolo11_postprocess` / `yolo11_obb_postprocess` / `yolo11_pose_postprocess` / `yolo11_seg_postprocess`：YOLO11 系列检测 / OBB / 姿态 / 分割后处理。
-- `yolov5_postprocess`：YOLOv5 检测后处理。
-- `yolo26_postprocess`：YOLO26 one-to-one 检测头后处理。
-- `rfdetr_postprocess`：RF-DETR 后处理。
-- `rfdetr_seg_postprocess`：RF-DETR 分割后处理（支持 `return_masks` 开关）。
+- `YOLO_640_LETTERBOX_COMMON`：图像预处理（resize、letterbox、归一化、仿射变换矩阵）。
+- `YOLO11_DET_PRE_POSTPROCESS` / `YOLO11_OBB_PRE_POSTPROCESS` / `YOLO11_POSE_PRE_POSTPROCESS` / `YOLO11_SEG_PRE_POSTPROCESS`：YOLO11 系列检测 / OBB / 姿态 / 分割后处理。
+- `YOLOV5_DET_PRE_POSTPROCESS`：YOLOv5 检测后处理。
+- `YOLO26_DET_PRE_POSTPROCESS`：YOLO26 one-to-one 检测头后处理。
+- `RFDETR_DET_PRE_POSTPROCESS`：RF-DETR 后处理。
+- `RFDETR_SEG_PRE_POSTPROCESS`：RF-DETR 分割后处理（支持 `return_masks` 开关）。
 
 模型仓库位于 `workspace/models/`，所有自定义后端 `.so` 都嵌在对应模型的 `1/` 目录下，通过 `docker-compose.yml` 一键启动。
 
@@ -68,16 +68,16 @@ docker run --rm --gpus all \
 ### 2. 复制产物到模型仓库
 
 ```bash
-cp build/libtriton_preprocess.so workspace/models/preprocess/1/
-cp build/libtriton_preprocess.so workspace/models/preprocess_rfdetr/1/
-cp build/libtriton_yolo11_postprocess.so workspace/models/yolo11_postprocess/1/
-cp build/libtriton_yolo11_obb_postprocess.so workspace/models/yolo11_obb_postprocess/1/
-cp build/libtriton_yolo11_pose_postprocess.so workspace/models/yolo11_pose_postprocess/1/
-cp build/libtriton_yolo11_seg_postprocess.so workspace/models/yolo11_seg_postprocess/1/
-cp build/libtriton_yolov5_postprocess.so workspace/models/yolov5_postprocess/1/
-cp build/libtriton_yolo26_postprocess.so workspace/models/yolo26_postprocess/1/
-cp build/libtriton_rfdetr_postprocess.so workspace/models/rfdetr_postprocess/1/
-cp build/libtriton_rfdetr_seg_postprocess.so workspace/models/rfdetr_seg_postprocess/1/
+cp build/libtriton_preprocess.so workspace/models/YOLO_640_LETTERBOX_COMMON/1/
+cp build/libtriton_preprocess.so workspace/models/RFDETR_512_DIRECT_COMMON/1/
+cp build/libtriton_yolo11_postprocess.so workspace/models/YOLO11_DET_PRE_POSTPROCESS/1/
+cp build/libtriton_yolo11_obb_postprocess.so workspace/models/YOLO11_OBB_PRE_POSTPROCESS/1/
+cp build/libtriton_yolo11_pose_postprocess.so workspace/models/YOLO11_POSE_PRE_POSTPROCESS/1/
+cp build/libtriton_yolo11_seg_postprocess.so workspace/models/YOLO11_SEG_PRE_POSTPROCESS/1/
+cp build/libtriton_yolov5_postprocess.so workspace/models/YOLOV5_DET_PRE_POSTPROCESS/1/
+cp build/libtriton_yolo26_postprocess.so workspace/models/YOLO26_DET_PRE_POSTPROCESS/1/
+cp build/libtriton_rfdetr_postprocess.so workspace/models/RFDETR_DET_PRE_POSTPROCESS/1/
+cp build/libtriton_rfdetr_seg_postprocess.so workspace/models/RFDETR_SEG_PRE_POSTPROCESS/1/
 ```
 
 ### 3. 自定义 CUDA 架构
@@ -128,10 +128,10 @@ docker logs triton-backends --tail 80
 
 ```text
 # workspace/models_to_load.txt
-classifier_ensemble
-yolo11_ensemble
-yolo11_pose_ensemble
-yolo11_seg_ensemble
+CLASSIFIER_CLASSIFY_PRE_ENSEMBLE
+YOLO11_DET_PRE_ENSEMBLE
+YOLO11_POSE_PRE_ENSEMBLE
+YOLO11_SEG_PRE_ENSEMBLE
 ```
 
 然后在项目根目录的 `.env` 中指定该文件：
@@ -150,14 +150,14 @@ docker compose up -d
 如果模型数量很少，也可以直接在 `.env` 中用逗号分隔：
 
 ```bash
-TRITON_MODELS=classifier_ensemble,yolo11_ensemble
+TRITON_MODELS=CLASSIFIER_CLASSIFY_PRE_ENSEMBLE,YOLO11_DET_PRE_ENSEMBLE
 ```
 
 说明：
 - `.env` 文件会被 `docker-compose.yml` 自动加载。
 - `TRITON_MODELS_FILE` 优先级高于 `TRITON_MODELS`。
 - 配置列表中的 ensemble 模型及其依赖（预处理、推理、后处理）会自动加载。
-- `labels` 模型是前端显示类别名依赖的公共服务，启用按需加载时会被自动追加到加载列表，无需手动配置。
+- `CUSTOM_LABELS` 模型是前端显示类别名依赖的公共服务，启用按需加载时会被自动追加到加载列表，无需手动配置。
 - 未加载的模型在前端 `/api/models` 中会显示为 `ready: false`，无法被选择推理。
 - 启用按需加载后，仍可通过 Triton Model Repository API 手动加载 / 卸载 / 更新模型，详见 [模型操作](#模型操作)。
 - 留空或不配置上述变量时，行为与之前一致：加载所有模型。
@@ -189,8 +189,8 @@ curl -s -X POST http://localhost:48000/v2/repository/index \
 
 ```json
 [
-  { "name": "classifier_ensemble", "version": "1", "state": "READY" },
-  { "name": "yolo11_pose_ensemble" }
+  { "name": "CLASSIFIER_CLASSIFY_PRE_ENSEMBLE", "version": "1", "state": "READY" },
+  { "name": "YOLO11_POSE_PRE_ENSEMBLE" }
 ]
 ```
 
@@ -199,7 +199,7 @@ curl -s -X POST http://localhost:48000/v2/repository/index \
 ### 2. 手动加载模型
 
 ```bash
-curl -s -X POST http://localhost:48000/v2/repository/models/yolo11_pose_ensemble/load \
+curl -s -X POST http://localhost:48000/v2/repository/models/YOLO11_POSE_PRE_ENSEMBLE/load \
   -H 'Content-Type: application/json' \
   -d '{}'
 ```
@@ -208,14 +208,14 @@ curl -s -X POST http://localhost:48000/v2/repository/models/yolo11_pose_ensemble
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" \
-  http://localhost:48000/v2/models/yolo11_pose_ensemble/ready
+  http://localhost:48000/v2/models/YOLO11_POSE_PRE_ENSEMBLE/ready
 # 200
 ```
 
 ### 3. 手动卸载模型
 
 ```bash
-curl -s -X POST http://localhost:48000/v2/repository/models/yolo11_pose_ensemble/unload \
+curl -s -X POST http://localhost:48000/v2/repository/models/YOLO11_POSE_PRE_ENSEMBLE/unload \
   -H 'Content-Type: application/json' \
   -d '{}'
 ```
@@ -224,10 +224,10 @@ curl -s -X POST http://localhost:48000/v2/repository/models/yolo11_pose_ensemble
 
 ### 4. 更新模型（热重载）
 
-当替换了某个模型的文件（例如更新了 `workspace/models/classifier/1/model.plan`）后，需要先卸载再加载，使 Triton 重新读取最新文件：
+当替换了某个模型的文件（例如更新了 `workspace/models/CLASSIFIER_CLASSIFY_PRE/1/model.plan`）后，需要先卸载再加载，使 Triton 重新读取最新文件：
 
 ```bash
-MODEL=yolo11_pose_ensemble
+MODEL=YOLO11_POSE_PRE_ENSEMBLE
 
 curl -s -X POST http://localhost:48000/v2/repository/models/$MODEL/unload \
   -H 'Content-Type: application/json' -d '{}'
@@ -240,13 +240,13 @@ curl -s -X POST http://localhost:48000/v2/repository/models/$MODEL/load \
 
 ### 5. 完全手动管理
 
-如果你希望启动时不加载任何模型，全部通过 API 手动控制，可以在 `workspace/models_to_load.txt` 中只保留 `labels`：
+如果你希望启动时不加载任何模型，全部通过 API 手动控制，可以在 `workspace/models_to_load.txt` 中只保留 `CUSTOM_LABELS`：
 
 ```text
-labels
+CUSTOM_LABELS
 ```
 
-这样 Triton 启动后仅加载 `labels` 公共服务，其它模型按需通过上述 API 加载。
+这样 Triton 启动后仅加载 `CUSTOM_LABELS` 公共服务，其它模型按需通过上述 API 加载。
 
 ---
 
@@ -256,26 +256,26 @@ labels
 
 ```
 workspace/models/
-├── preprocess/
+├── YOLO_640_LETTERBOX_COMMON/
 │   ├── config.pbtxt
 │   └── 1/libtriton_preprocess.so
-├── yolo11/
+├── YOLO11_DET_PRE/
 │   ├── config.pbtxt
 │   └── 1/model.plan
-├── yolo11_postprocess/
+├── YOLO11_DET_PRE_POSTPROCESS/
 │   ├── config.pbtxt
 │   └── 1/libtriton_yolo11_postprocess.so
-├── yolo11_ensemble/config.pbtxt
-├── labels/
+├── YOLO11_DET_PRE_ENSEMBLE/config.pbtxt
+├── CUSTOM_LABELS/
 │   ├── config.pbtxt
 │   └── 1/model.py
 └── ...
 ```
 
-### 1. 预处理配置（`preprocess/config.pbtxt`）
+### 1. 预处理配置（`YOLO_640_LETTERBOX_COMMON/config.pbtxt`）
 
 ```protobuf
-name: "preprocess"
+name: "YOLO_640_LETTERBOX_COMMON"
 backend: "preprocess"
 max_batch_size: 16
 
@@ -338,10 +338,10 @@ parameters: {
 | `fill_value` | float[3] | letterbox 填充色（BGR） |
 | `output_transform` | bool | 是否输出 `d2i` 逆变换矩阵 |
 
-### 2. 检测后处理配置（`yolo11_postprocess/config.pbtxt`）
+### 2. 检测后处理配置（`YOLO11_DET_PRE_POSTPROCESS/config.pbtxt`）
 
 ```protobuf
-name: "yolo11_postprocess"
+name: "YOLO11_DET_PRE_POSTPROCESS"
 backend: "yolo11_postprocess"
 max_batch_size: 16
 
@@ -395,18 +395,18 @@ parameters: {
 
 | 模型 | 输入名 | 输入维度 | 输出 |
 |------|--------|----------|------|
-| `yolo11_postprocess` | `model_output` | `[84, 8400]` | `num_dets`, `detection_boxes[-1,4]`, `detection_scores[-1]`, `detection_classes[-1]` |
-| `yolo11_obb_postprocess` | `model_output` | `[20, 8400]` | 同上，但 `detection_boxes[-1,5]`（含 angle） |
-| `yolo11_pose_postprocess` | `model_output` | `[56, 8400]` | 同上 + `detection_keypoints[-1,17,3]` |
-| `yolo11_seg_postprocess` | `model_output`, `mask_protos` | `[116, 8400]`, `[32, 160, 160]` | 同上 + `detection_masks[-1]`, `mask_offsets[-1]`, `mask_shapes[-1,2]` |
-| `yolov5_postprocess` | `model_output` | `[25200, 85]` | 同 `yolo11_postprocess` |
-| `yolo26_postprocess` | `model_output` | `[300, 6]` | 同 `yolo11_postprocess` |
-| `rfdetr_postprocess` | `dets`, `labels` | `[300, 4]`, `[300, 91]` | 同 `yolo11_postprocess` |
+| `YOLO11_DET_PRE_POSTPROCESS` | `model_output` | `[84, 8400]` | `num_dets`, `detection_boxes[-1,4]`, `detection_scores[-1]`, `detection_classes[-1]` |
+| `YOLO11_OBB_PRE_POSTPROCESS` | `model_output` | `[20, 8400]` | 同上，但 `detection_boxes[-1,5]`（含 angle） |
+| `YOLO11_POSE_PRE_POSTPROCESS` | `model_output` | `[56, 8400]` | 同上 + `detection_keypoints[-1,17,3]` |
+| `YOLO11_SEG_PRE_POSTPROCESS` | `model_output`, `mask_protos` | `[116, 8400]`, `[32, 160, 160]` | 同上 + `detection_masks[-1]`, `mask_offsets[-1]`, `mask_shapes[-1,2]` |
+| `YOLOV5_DET_PRE_POSTPROCESS` | `model_output` | `[25200, 85]` | 同 `YOLO11_DET_PRE_POSTPROCESS` |
+| `YOLO26_DET_PRE_POSTPROCESS` | `model_output` | `[300, 6]` | 同 `YOLO11_DET_PRE_POSTPROCESS` |
+| `RFDETR_DET_PRE_POSTPROCESS` | `dets`, `labels` | `[300, 4]`, `[300, 91]` | 同 `YOLO11_DET_PRE_POSTPROCESS` |
 
-### 4. Ensemble 配置示例（`yolo11_ensemble/config.pbtxt`）
+### 4. Ensemble 配置示例（`YOLO11_DET_PRE_ENSEMBLE/config.pbtxt`）
 
 ```protobuf
-name: "yolo11_ensemble"
+name: "YOLO11_DET_PRE_ENSEMBLE"
 platform: "ensemble"
 max_batch_size: 16
 
@@ -425,18 +425,18 @@ output [
 ensemble_scheduling {
   step [
     {
-      model_name: "preprocess"
+      model_name: "YOLO_640_LETTERBOX_COMMON"
       input_map { key: "raw_image" value: "raw_image" }
       output_map { key: "preprocessed_output" value: "preprocessed_output" }
       output_map { key: "transform_metadata" value: "transform_metadata" }
     },
     {
-      model_name: "yolo11"
+      model_name: "YOLO11_DET_PRE"
       input_map { key: "images" value: "preprocessed_output" }
       output_map { key: "output0" value: "output0" }
     },
     {
-      model_name: "yolo11_postprocess"
+      model_name: "YOLO11_DET_PRE_POSTPROCESS"
       input_map { key: "model_output" value: "output0" }
       output_map { key: "num_dets" value: "num_dets" }
       output_map { key: "detection_boxes" value: "detection_boxes" }
@@ -447,10 +447,10 @@ ensemble_scheduling {
 }
 ```
 
-### 5. 标签服务配置（`labels/config.pbtxt`）
+### 5. 标签服务配置（`CUSTOM_LABELS/config.pbtxt`）
 
 ```protobuf
-name: "labels"
+name: "CUSTOM_LABELS"
 backend: "python"
 max_batch_size: 0
 
@@ -463,11 +463,11 @@ output [
 
 parameters: {
   key: "names_directory"
-  value: { string_value: "/models/labels/names" }
+  value: { string_value: "/models/CUSTOM_LABELS/names" }
 }
 ```
 
-标签文件放在 `workspace/models/labels/names/<model_name>.txt`，每行一个类别名。
+标签文件放在 `workspace/models/CUSTOM_LABELS/names/<model_name>.txt`，每行一个类别名。
 
 ---
 
@@ -503,17 +503,17 @@ parameters: {
 ### 1. YOLO11 检测
 
 ```bash
-cd workspace/models/yolo11/1
+cd workspace/models/YOLO11_DET_PRE/1
 
 # 1) PT -> ONNX
 python3 - <<PY
 from ultralytics import YOLO
-model = YOLO("yolo11n.pt")
+model = YOLO("YOLO11_DET_PREn.pt")
 model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
 PY
 
 # 2) ONNX -> TensorRT plan
-trtexec --onnx=yolo11n.onnx \
+trtexec --onnx=YOLO11_DET_PREn.onnx \
   --saveEngine=model.plan \
   --fp16 \
   --minShapes=images:1x3x640x640 \
@@ -524,15 +524,15 @@ trtexec --onnx=yolo11n.onnx \
 ### 2. YOLO11-Pose
 
 ```bash
-cd workspace/models/yolo11_pose/1
+cd workspace/models/YOLO11_POSE_PRE/1
 
 python3 - <<PY
 from ultralytics import YOLO
-model = YOLO("yolo11n-pose.pt")
+model = YOLO("YOLO11_DET_PREn-pose.pt")
 model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
 PY
 
-trtexec --onnx=yolo11n-pose.onnx \
+trtexec --onnx=YOLO11_DET_PREn-pose.onnx \
   --saveEngine=model.plan \
   --fp16 \
   --minShapes=images:1x3x640x640 \
@@ -543,15 +543,15 @@ trtexec --onnx=yolo11n-pose.onnx \
 ### 3. YOLO11-OBB
 
 ```bash
-cd workspace/models/yolo11_obb/1
+cd workspace/models/YOLO11_OBB_PRE/1
 
 python3 - <<PY
 from ultralytics import YOLO
-model = YOLO("yolo11n-obb.pt")
+model = YOLO("YOLO11_DET_PREn-obb.pt")
 model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
 PY
 
-trtexec --onnx=yolo11n-obb.onnx \
+trtexec --onnx=YOLO11_DET_PREn-obb.onnx \
   --saveEngine=model.plan \
   --fp16 \
   --minShapes=images:1x3x640x640 \
@@ -562,15 +562,15 @@ trtexec --onnx=yolo11n-obb.onnx \
 ### 4. YOLO11-Seg
 
 ```bash
-cd workspace/models/yolo11_seg/1
+cd workspace/models/YOLO11_SEG_PRE/1
 
 python3 - <<PY
 from ultralytics import YOLO
-model = YOLO("yolo11s-seg.pt")
+model = YOLO("YOLO11_DET_PREs-seg.pt")
 model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
 PY
 
-trtexec --onnx=yolo11s-seg.onnx \
+trtexec --onnx=YOLO11_DET_PREs-seg.onnx \
   --saveEngine=model.plan \
   --fp16 \
   --minShapes=images:1x3x640x640 \
@@ -581,16 +581,16 @@ trtexec --onnx=yolo11s-seg.onnx \
 ### 5. YOLOv5
 
 ```bash
-cd workspace/models/yolov5/1
+cd workspace/models/YOLOV5_DET_PRE/1
 
 python3 - <<PY
 from ultralytics import YOLO
-model = YOLO("yolov5s.pt")
+model = YOLO("YOLOV5_DET_PREs.pt")
 model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
 PY
 
 # YOLOv5 默认导出为 anchor_first [batch, 25200, 85]
-trtexec --onnx=yolov5s.onnx \
+trtexec --onnx=YOLOV5_DET_PREs.onnx \
   --saveEngine=model.plan \
   --fp16 \
   --minShapes=images:1x3x640x640 \
@@ -618,15 +618,15 @@ parameters: {
 ### 6. YOLO26
 
 ```bash
-cd workspace/models/yolo26/1
+cd workspace/models/YOLO26_DET_PRE/1
 
 python3 - <<PY
 from ultralytics import YOLO
-model = YOLO("yolo26s.pt")
+model = YOLO("YOLO26_DET_PREs.pt")
 model.export(format="onnx", imgsz=640, half=False, simplify=True, dynamic=True)
 PY
 
-trtexec --onnx=yolo26s.onnx \
+trtexec --onnx=YOLO26_DET_PREs.onnx \
   --saveEngine=model.plan \
   --fp16 \
   --minShapes=images:1x3x640x640 \
@@ -639,7 +639,7 @@ YOLO26 输出为 `[batch, 300, 6]`，后处理无需 NMS。
 ### 7. RF-DETR Seg
 
 ```bash
-cd workspace/models/rfdetr_seg/1
+cd workspace/models/RFDETR_SEG_PRE/1
 
 # ONNX -> TensorRT plan（input 384x384，max batch 16，FP16）
 trtexec --onnx=model.onnx \
@@ -656,11 +656,11 @@ trtexec --onnx=model.onnx \
 ### 8. RF-DETR
 
 ```bash
-cd workspace/models/rfdetr/1
+cd workspace/models/RFDETR_DET_PRE/1
 
 # 转出onnx具体见官方仓库，目前支持的是不带seg的目标检测版本
 # 注意：RF-DETR ONNX 有两个输出 dets [batch,300,4] 和 labels [batch,300,91]
-trtexec --onnx=rfdetr-small.sim.onnx \
+trtexec --onnx=RFDETR_DET_PRE-small.sim.onnx \
   --saveEngine=model.plan \
   --fp16 \
   --minShapes=images:1x3x512x512 \
@@ -668,7 +668,7 @@ trtexec --onnx=rfdetr-small.sim.onnx \
   --maxShapes=images:16x3x512x512
 ```
 
-RF-DETR 使用独立的预处理 `preprocess_rfdetr`（512x512、ImageNet 归一化、swap_rb）。
+RF-DETR 使用独立的预处理 `RFDETR_512_DIRECT_COMMON`（512x512、ImageNet 归一化、swap_rb）。
 
 ### 转换后检查清单
 
@@ -676,7 +676,7 @@ RF-DETR 使用独立的预处理 `preprocess_rfdetr`（512x512、ImageNet 归一
 2. `config.pbtxt` 中的 `dims` 与 ONNX 输出严格一致。
 3. `output_format`（`channel_first` / `anchor_first`）与 ONNX 排布一致。
 4. `score_activation` 与导出时是否做 sigmoid 一致（Ultralytics 默认导出通常已做 sigmoid，填 `none`）。
-5. 若修改了输入分辨率，同步修改 `preprocess` 的 `target_width/target_height` 和后处理 `input_width/input_height`。
+5. 若修改了输入分辨率，同步修改 `YOLO_640_LETTERBOX_COMMON` 的 `target_width/target_height` 和后处理 `input_width/input_height`。
 
 ---
 

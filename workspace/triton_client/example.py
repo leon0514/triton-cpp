@@ -28,7 +28,7 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="yolov5_ensemble",
+        default="YOLOV5_DET_PRE_ENSEMBLE",
         help="Model or ensemble name",
     )
     parser.add_argument(

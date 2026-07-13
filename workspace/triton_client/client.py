@@ -6,7 +6,7 @@ Examples
 # gRPC
 client = TritonClient(url="localhost:48001", protocol="grpc")
 result = client.infer(
-    model_name="yolo11_ensemble",
+    model_name="YOLO11_DET_PRE_ENSEMBLE",
     inputs={"raw_image": img_np},
     outputs=["num_dets", "detection_boxes"],
 )
@@ -14,7 +14,7 @@ result = client.infer(
 # HTTP
 client = TritonClient(url="localhost:48000", protocol="http")
 result = client.infer(
-    model_name="yolo11_ensemble",
+    model_name="YOLO11_DET_PRE_ENSEMBLE",
     inputs={"raw_image": img_np},
     outputs=["num_dets", "detection_boxes"],
 )
@@ -22,7 +22,7 @@ result = client.infer(
 # System shared memory (over HTTP)
 client = TritonClient(url="localhost:48000", protocol="shm")
 result = client.infer(
-    model_name="yolo11_ensemble",
+    model_name="YOLO11_DET_PRE_ENSEMBLE",
     inputs={"raw_image": img_np},
     outputs=["num_dets", "detection_boxes"],
     output_specs={

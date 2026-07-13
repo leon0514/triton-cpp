@@ -931,7 +931,7 @@ docker run --rm -it --gpus all \
 ```bash
 mkdir -p /opt/tritonserver/backends/yolov5_postprocess
 cp build/libtriton_yolov5_postprocess.so /opt/tritonserver/backends/yolov5_postprocess/
-cp -r workspace/models/yolov5_postprocess <model_repository>/
+cp -r workspace/models/YOLOV5_DET_PRE_POSTPROCESS <model_repository>/
 ```
 
 #### 方式二：放在模型版本目录
@@ -939,7 +939,7 @@ cp -r workspace/models/yolov5_postprocess <model_repository>/
 ```bash
 mkdir -p <model_repository>/yolov5_postprocess/1
 cp build/libtriton_yolov5_postprocess.so <model_repository>/yolov5_postprocess/1/
-cp workspace/models/yolov5_postprocess/config.pbtxt <model_repository>/yolov5_postprocess/
+cp workspace/models/YOLOV5_DET_PRE_POSTPROCESS/config.pbtxt <model_repository>/yolov5_postprocess/
 ```
 
 ### 11.4 Ensemble 配置
@@ -1017,7 +1017,7 @@ outputs = [
 # gRPC / HTTP
 with TritonClient("localhost:48001", protocol="grpc") as client:
     result = client.infer(
-        model_name="yolov5_ensemble",
+        model_name="YOLOV5_DET_PRE_ENSEMBLE",
         inputs={"raw_image": img_np},
         outputs=outputs,
     )
@@ -1033,7 +1033,7 @@ output_specs = {
 
 with TritonClient("localhost:48000", protocol="shm") as client:
     result = client.infer(
-        model_name="yolov5_ensemble",
+        model_name="YOLOV5_DET_PRE_ENSEMBLE",
         inputs={"raw_image": img_np},
         outputs=outputs,
         output_specs=output_specs,

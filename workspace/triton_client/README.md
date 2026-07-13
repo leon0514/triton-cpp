@@ -69,7 +69,7 @@ outputs = [
 # gRPC
 with TritonClient("localhost:48001", protocol="grpc") as client:
     result = client.infer(
-        model_name="yolov5_ensemble",
+        model_name="YOLOV5_DET_PRE_ENSEMBLE",
         inputs={"raw_image": img_np},
         outputs=outputs,
     )
@@ -78,7 +78,7 @@ with TritonClient("localhost:48001", protocol="grpc") as client:
 # HTTP
 with TritonClient("localhost:48000", protocol="http") as client:
     result = client.infer(
-        model_name="yolov5_ensemble",
+        model_name="YOLOV5_DET_PRE_ENSEMBLE",
         inputs={"raw_image": img_np},
         outputs=outputs,
     )
@@ -94,7 +94,7 @@ output_specs = {
 
 with TritonClient("localhost:48000", protocol="shm") as client:
     result = client.infer(
-        model_name="yolov5_ensemble",
+        model_name="YOLOV5_DET_PRE_ENSEMBLE",
         inputs={"raw_image": img_np},
         outputs=outputs,
         output_specs=output_specs,
@@ -201,7 +201,7 @@ python3 triton_client/example.py --protocol shm
 也支持指定模型和图片：
 
 ```bash
-python3 triton_client/example.py --protocol grpc --model yolo11_ensemble --image images/zidane.jpg
+python3 triton_client/example.py --protocol grpc --model YOLO11_DET_PRE_ENSEMBLE --image images/zidane.jpg
 ```
 
 ## 测试
@@ -214,7 +214,7 @@ python3 triton_client/test_client.py
 python3 triton_client/test_client.py --integration
 ```
 
-集成测试默认连接 `localhost:48001` (gRPC) 和 `localhost:48000` (HTTP/SHM)，并调用 `yolov5_ensemble` 模型，可在 `test_client.py` 中按需修改。
+集成测试默认连接 `localhost:48001` (gRPC) 和 `localhost:48000` (HTTP/SHM)，并调用 `YOLOV5_DET_PRE_ENSEMBLE` 模型，可在 `test_client.py` 中按需修改。
 
 ## 性能测试
 

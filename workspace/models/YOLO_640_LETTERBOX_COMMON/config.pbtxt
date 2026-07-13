@@ -1,0 +1,102 @@
+name: "YOLO_640_LETTERBOX_COMMON"
+backend: "preprocess"
+max_batch_size: 16
+
+# 标准 Triton 动态 Batch 契约：
+# - 配置文件中声明的是单张图像的维度（不含 batch 维度）。
+# - 输入为单张 HWC BGR uint8 图像，维度 [H, W, 3]。
+# - 输出为单张 NCHW 预处理结果，维度 [3, target_height, target_width]。
+# - Triton 在底层会将多个 request 拼成 [N, H, W, 3] 传给后端，
+#   后端需向单个 Response 返回 [3, target_height, target_width]。
+
+input [
+  {
+    name: "raw_image"
+    data_type: TYPE_UINT8
+    format: FORMAT_NONE
+    dims: [-1, -1, 3]
+  }
+]
+
+output [
+  {
+    name: "preprocessed_output"
+    data_type: TYPE_FP32
+    dims: [3, 640, 640]
+  },
+  {
+    name: "transform_metadata"
+    data_type: TYPE_FP32
+    dims: [6]
+  }
+]
+
+# 后端自定义参数（parameters 字段会被后端在 ModelInitialize 时解析）
+parameters: {
+  key: "target_width"
+  value: {
+    string_value: "640"
+  }
+}
+parameters: {
+  key: "target_height"
+  value: {
+    string_value: "640"
+  }
+}
+parameters: {
+  key: "resize_type"
+  value: {
+    string_value: "letterbox"
+  }
+}
+parameters: {
+  key: "output_type"
+  value: {
+    string_value: "FP32"
+  }
+}
+parameters: {
+  key: "norm_type"
+  value: {
+    string_value: "alpha_beta"
+  }
+}
+parameters: {
+  key: "alpha"
+  value: {
+    string_value: "0.00392156862745098"
+  }
+}
+parameters: {
+  key: "beta"
+  value: {
+    string_value: "0.0"
+  }
+}
+parameters: {
+  key: "channel_type"
+  value: {
+    string_value: "none"
+  }
+}
+parameters: {
+  key: "fill_value"
+  value: {
+    string_value: "[114.0, 114.0, 114.0]"
+  }
+}
+parameters: {
+  key: "output_transform"
+  value: {
+    string_value: "true"
+  }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]

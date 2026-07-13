@@ -1,0 +1,93 @@
+name: "YOLO11_POSE_PRE_POSTPROCESS"
+backend: "yolo11_pose_postprocess"
+max_batch_size: 16
+
+# YOLO11-pose 模型输出排布（Ultralytics 默认导出）：
+#   - channels_first: [batch, 56, 8400]  （4 box + 1 class + 51 keypoints，anchor 在最后）
+#   - anchor_first:   [batch, 8400, 56]
+# 这里以 channels_first 为例，对应 COCO-pose 17 个关键点，每个关键点 x,y,visibility。
+
+input [
+  {
+    name: "model_output"
+    data_type: TYPE_FP32
+    dims: [56, 8400]
+  }
+]
+
+output [
+  {
+    name: "num_dets"
+    data_type: TYPE_INT32
+    dims: [1]
+  },
+  {
+    name: "detection_boxes"
+    data_type: TYPE_FP32
+    dims: [-1, 4]
+  },
+  {
+    name: "detection_scores"
+    data_type: TYPE_FP32
+    dims: [-1]
+  },
+  {
+    name: "detection_classes"
+    data_type: TYPE_INT32
+    dims: [-1]
+  },
+  {
+    name: "detection_keypoints"
+    data_type: TYPE_FP32
+    dims: [-1, 17, 3]
+  }
+]
+
+parameters: {
+  key: "num_classes"
+  value: { string_value: "1" }
+}
+parameters: {
+  key: "num_keypoints"
+  value: { string_value: "17" }
+}
+parameters: {
+  key: "keypoint_dim"
+  value: { string_value: "3" }
+}
+parameters: {
+  key: "confidence_threshold"
+  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "iou_threshold"
+  value: { string_value: "0.45" }
+}
+parameters: {
+  key: "max_detections"
+  value: { string_value: "300" }
+}
+parameters: {
+  key: "max_candidates"
+  value: { string_value: "8400" }
+}
+parameters: {
+  key: "output_format"
+  value: { string_value: "channel_first" }
+}
+parameters: {
+  key: "score_activation"
+  value: { string_value: "none" }
+}
+parameters: {
+  key: "keypoint_activation"
+  value: { string_value: "none" }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]

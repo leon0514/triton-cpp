@@ -1,12 +1,12 @@
 # Triton 按需加载模型列表
 # 每行一个 ensemble 模型名，# 开头为注释
-labels
-classifier_ensemble
-yolo11_ensemble
-yolo11_obb_ensemble
-yolo11_pose_ensemble
-yolo11_seg_ensemble
-yolo26_ensemble
-yolov5_ensemble
-rfdetr_ensemble
-rfdetr_seg_ensemble
+CUSTOM_LABELS
+CLASSIFIER_CLASSIFY_PRE_ENSEMBLE
+YOLO11_DET_PRE_ENSEMBLE
+YOLO11_OBB_PRE_ENSEMBLE
+YOLO11_POSE_PRE_ENSEMBLE
+YOLO11_SEG_PRE_ENSEMBLE
+YOLO26_DET_PRE_ENSEMBLE
+YOLOV5_DET_PRE_ENSEMBLE
+RFDETR_DET_PRE_ENSEMBLE
+RFDETR_SEG_PRE_ENSEMBLE

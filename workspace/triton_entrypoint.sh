@@ -35,8 +35,8 @@ fi
 if [ ${#MODELS[@]} -gt 0 ]; then
   ARGS+=(--model-control-mode=explicit)
 
-  # labels 模型是前端显示类别名依赖的公共服务，始终确保它被加载
-  UNIQUE_MODELS=$(printf "%s\n" "${MODELS[@]}" labels | awk '!seen[$0]++')
+  # CUSTOM_LABELS 模型是前端显示类别名依赖的公共服务，始终确保它被加载
+  UNIQUE_MODELS=$(printf "%s\n" "${MODELS[@]}" CUSTOM_LABELS | awk '!seen[$0]++')
   for m in $UNIQUE_MODELS; do
     ARGS+=(--load-model="$m")
   done

@@ -7,23 +7,23 @@
 #        docker run --rm --gpus all -v "$(pwd)":/workspace \
 #          nvcr.io/nvidia/tritonserver:25.01-py3 bash /workspace/build.sh
 #
-#   Convert the yolo11_pose ONNX model to TensorRT plan:
-#        bash workspace/models/yolo11_pose/convert_yolo11_pose.sh
+#   Convert the YOLO11_POSE_PRE ONNX model to TensorRT plan:
+#        bash workspace/models/YOLO11_POSE_PRE/convert_yolo11_pose.sh
 #
 # Start the server:
 #        docker compose up
 #
 # The backend shared libraries are embedded in the model repository:
-#   /models/preprocess/1/libtriton_preprocess.so
-#   /models/preprocess_rfdetr/1/libtriton_preprocess.so
-#   /models/yolo11_postprocess/1/libtriton_yolo11_postprocess.so
-#   /models/yolo11_pose_postprocess/1/libtriton_yolo11_pose_postprocess.so
-#   /models/yolo11_obb_postprocess/1/libtriton_yolo11_obb_postprocess.so
-#   /models/yolo11_seg_postprocess/1/libtriton_yolo11_seg_postprocess.so
-#   /models/yolov5_postprocess/1/libtriton_yolov5_postprocess.so
-#   /models/yolo26_postprocess/1/libtriton_yolo26_postprocess.so
-#   /models/rfdetr_postprocess/1/libtriton_rfdetr_postprocess.so
-#   /models/rfdetr_seg_postprocess/1/libtriton_rfdetr_seg_postprocess.so
+#   /models/YOLO_640_LETTERBOX_COMMON/1/libtriton_preprocess.so
+#   /models/RFDETR_512_DIRECT_COMMON/1/libtriton_preprocess.so
+#   /models/YOLO11_DET_PRE_POSTPROCESS/1/libtriton_yolo11_postprocess.so
+#   /models/YOLO11_POSE_PRE_POSTPROCESS/1/libtriton_yolo11_pose_postprocess.so
+#   /models/YOLO11_OBB_PRE_POSTPROCESS/1/libtriton_yolo11_obb_postprocess.so
+#   /models/YOLO11_SEG_PRE_POSTPROCESS/1/libtriton_yolo11_seg_postprocess.so
+#   /models/YOLOV5_DET_PRE_POSTPROCESS/1/libtriton_yolov5_postprocess.so
+#   /models/YOLO26_DET_PRE_POSTPROCESS/1/libtriton_yolo26_postprocess.so
+#   /models/RFDETR_DET_PRE_POSTPROCESS/1/libtriton_rfdetr_postprocess.so
+#   /models/RFDETR_SEG_PRE_POSTPROCESS/1/libtriton_rfdetr_seg_postprocess.so
 
 services:
   triton:

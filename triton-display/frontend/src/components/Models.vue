@@ -3,7 +3,7 @@
     <div class="page-header">
       <div class="page-title">
         <h2>模型管理</h2>
-        <span class="page-subtitle">共 {{ filteredModels.length }} 个模型</span>
+        <span class="page-subtitle">共 {{ sortedModels.length }} 个模型</span>
       </div>
       <div class="toolbar">
         <input
@@ -12,6 +12,14 @@
           type="text"
           placeholder="搜索模型名称..."
         />
+        <select v-model="sortKey" class="sort-select">
+          <option value="type">按类型排序</option>
+          <option value="name">按名称排序</option>
+          <option value="state">按状态排序</option>
+        </select>
+        <button class="sort-order-btn" @click="sortOrder = sortOrder === 'asc' ? 'desc' : 'asc'">
+          {{ sortOrder === 'asc' ? '升序 ↑' : '降序 ↓' }}
+        </button>
         <button class="refresh-btn" :disabled="loading" @click="loadModels">
           <span class="icon">↻</span>
           {{ loading ? '刷新中...' : '刷新' }}
@@ -35,7 +43,7 @@
         </thead>
         <tbody>
           <tr
-            v-for="m in filteredModels"
+            v-for="m in sortedModels"
             :key="m.name"
             :class="{ ready: m.ready }"
           >
@@ -83,7 +91,7 @@
               </button>
             </td>
           </tr>
-          <tr v-if="filteredModels.length === 0">
+          <tr v-if="sortedModels.length === 0">
             <td colspan="6" class="empty-cell">未找到匹配的模型</td>
           </tr>
         </tbody>
@@ -111,13 +119,50 @@ const models = ref([])
 const loading = ref(false)
 const error = ref('')
 const search = ref('')
+const sortKey = ref('type')
+const sortOrder = ref('asc')
 const busyModels = ref(new Set())
 const selectedModel = ref(null)
+
+const typeOrder = { CUSTOM: 0, PREPROCESS: 1, MODEL: 2, POSTPROCESS: 3, ENSEMBLE: 4 }
+const stateOrder = { READY: 0, LOADING: 1, UNLOADING: 2 }
 
 const filteredModels = computed(() => {
   const s = search.value.trim().toLowerCase()
   if (!s) return models.value
   return models.value.filter((m) => m.name.toLowerCase().includes(s))
+})
+
+const sortedModels = computed(() => {
+  const list = [...filteredModels.value]
+  const order = sortOrder.value === 'asc' ? 1 : -1
+
+  return list.sort((a, b) => {
+    if (sortKey.value === 'type') {
+      const ta = typeOrder[modelTypeLabel(a.name)] ?? 99
+      const tb = typeOrder[modelTypeLabel(b.name)] ?? 99
+      if (ta !== tb) return (ta - tb) * order
+      // 同类型按状态（READY 在前）
+      const sa = stateOrder[a.state] ?? 99
+      const sb = stateOrder[b.state] ?? 99
+      if (sa !== sb) return sa - sb
+      return a.name.localeCompare(b.name)
+    }
+
+    if (sortKey.value === 'state') {
+      const sa = stateOrder[a.state] ?? 99
+      const sb = stateOrder[b.state] ?? 99
+      if (sa !== sb) return (sa - sb) * order
+      // 同状态按类型
+      const ta = typeOrder[modelTypeLabel(a.name)] ?? 99
+      const tb = typeOrder[modelTypeLabel(b.name)] ?? 99
+      if (ta !== tb) return ta - tb
+      return a.name.localeCompare(b.name)
+    }
+
+    // sortKey === 'name'
+    return a.name.localeCompare(b.name) * order
+  })
 })
 
 const configJson = computed(() => {
@@ -130,18 +175,18 @@ function isBusy(name) {
 }
 
 function modelTypeLabel(name) {
-  if (name.endsWith('_ensemble')) return 'ensemble'
-  if (name.startsWith('preprocess')) return 'preprocess'
-  if (name.endsWith('_postprocess')) return 'postprocess'
-  if (name === 'labels') return 'labels'
-  return 'model'
+  if (name.endsWith('_ENSEMBLE')) return 'ENSEMBLE'
+  if (name.endsWith('_PREPROCESS') || name.endsWith('_COMMON')) return 'PREPROCESS'
+  if (name.endsWith('_POSTPROCESS')) return 'POSTPROCESS'
+  if (name === 'CUSTOM_LABELS') return 'CUSTOM'
+  return 'MODEL'
 }
 
 function modelTypeClass(name) {
-  if (name.endsWith('_ensemble')) return 'ensemble'
-  if (name.startsWith('preprocess')) return 'preprocess'
-  if (name.endsWith('_postprocess')) return 'postprocess'
-  if (name === 'labels') return 'labels'
+  if (name.endsWith('_ENSEMBLE')) return 'ensemble'
+  if (name.endsWith('_PREPROCESS') || name.endsWith('_COMMON')) return 'preprocess'
+  if (name.endsWith('_POSTPROCESS')) return 'postprocess'
+  if (name === 'CUSTOM_LABELS') return 'labels'
   return 'model'
 }
 
@@ -270,6 +315,31 @@ onMounted(loadModels)
 .refresh-btn:disabled {
   background: #9fa8da;
   cursor: not-allowed;
+}
+
+.sort-select,
+.sort-order-btn {
+  padding: 8px 14px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: white;
+  color: #333;
+  font-size: 14px;
+  cursor: pointer;
+  outline: none;
+}
+
+.sort-select:focus {
+  border-color: #1a237e;
+}
+
+.sort-order-btn {
+  background: #f5f5f5;
+  transition: background 0.2s;
+}
+
+.sort-order-btn:hover {
+  background: #e0e0e0;
 }
 
 .icon {

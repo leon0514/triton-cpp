@@ -49,7 +49,7 @@ class TestIntegration(unittest.TestCase):
 
     GRPC_URL = "localhost:48001"
     HTTP_URL = "localhost:48000"
-    MODEL = "yolov5_ensemble"
+    MODEL = "YOLOV5_DET_PRE_ENSEMBLE"
     IMAGE = "images/bus.jpg"
 
     def _load_image(self):

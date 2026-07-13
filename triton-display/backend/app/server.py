@@ -50,7 +50,7 @@ def fetch_labels_from_triton(model_name: str):
     input_tensor = httpclient.InferInput("model_name", [1], "BYTES")
     input_tensor.set_data_from_numpy(model_name_arr)
     output = httpclient.InferRequestedOutput("labels")
-    response = client.infer("labels", inputs=[input_tensor], outputs=[output])
+    response = client.infer("CUSTOM_LABELS", inputs=[input_tensor], outputs=[output])
     labels = response.as_numpy("labels")
     return [l.decode("utf-8") for l in labels]
 
@@ -71,7 +71,7 @@ async def list_all_labels():
     try:
         client = get_triton_client()
         models = client.get_model_repository_index()
-        ensembles = [m["name"] for m in models if m["name"].endswith("_ensemble") and m.get("state") == "READY"]
+        ensembles = [m["name"] for m in models if m["name"].endswith("_ENSEMBLE") and m.get("state") == "READY"]
         result = {}
         for name in ensembles:
             try:
@@ -96,7 +96,7 @@ async def list_models():
                 "ready": m.get("state", "") == "READY",
             }
             for m in models
-            if m["name"].endswith("_ensemble")
+            if m["name"].endswith("_ENSEMBLE")
         ]
         return {"models": ensembles}
     except Exception as e:
@@ -187,8 +187,10 @@ async def infer(
 
         client = get_triton_client()
 
+        model_name_lower = model_name.lower()
+
         # Classification ensemble returns top-k classes and scores
-        if "classifier" in model_name:
+        if "classifier" in model_name_lower:
             output_names = ["classes", "scores", "transform_metadata"]
             outputs = [httpclient.InferRequestedOutput(name) for name in output_names]
             response = client.infer(
@@ -220,11 +222,11 @@ async def infer(
         ]
 
         # Pose models also have keypoints
-        if "pose" in model_name:
+        if "pose" in model_name_lower:
             output_names.append("detection_keypoints")
 
         # Segmentation models have mask outputs
-        if "seg" in model_name:
+        if "seg" in model_name_lower:
             output_names.extend([
                 "detection_masks",
                 "mask_offsets",
@@ -263,11 +265,11 @@ async def infer(
                 "box": boxes[i].tolist(),
             }
 
-            if "pose" in model_name:
+            if "pose" in model_name_lower:
                 kpts = response.as_numpy("detection_keypoints")[0, i]
                 det["keypoints"] = kpts.tolist()
 
-            if "seg" in model_name:
+            if "seg" in model_name_lower:
                 masks = response.as_numpy("detection_masks")[0]
                 offsets = response.as_numpy("mask_offsets")[0]
                 shapes = response.as_numpy("mask_shapes")[0]
