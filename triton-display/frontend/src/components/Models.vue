@@ -176,7 +176,7 @@ function isBusy(name) {
 
 function modelTypeLabel(name) {
   if (name.endsWith('_ENSEMBLE')) return 'ENSEMBLE'
-  if (name.endsWith('_PREPROCESS') || name.endsWith('_COMMON')) return 'PREPROCESS'
+  if (name.endsWith('_PREPROCESS')) return 'PREPROCESS'
   if (name.endsWith('_POSTPROCESS')) return 'POSTPROCESS'
   if (name === 'CUSTOM_LABELS') return 'CUSTOM'
   return 'MODEL'
@@ -184,7 +184,7 @@ function modelTypeLabel(name) {
 
 function modelTypeClass(name) {
   if (name.endsWith('_ENSEMBLE')) return 'ensemble'
-  if (name.endsWith('_PREPROCESS') || name.endsWith('_COMMON')) return 'preprocess'
+  if (name.endsWith('_PREPROCESS')) return 'preprocess'
   if (name.endsWith('_POSTPROCESS')) return 'postprocess'
   if (name === 'CUSTOM_LABELS') return 'labels'
   return 'model'
