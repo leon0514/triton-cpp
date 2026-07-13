@@ -1,4 +1,4 @@
-name: "CLASSIFIER_CLASSIFY_PRE_ENSEMBLE"
+name: "CLASSIFIER_SMOKING_ENSEMBLE"
 platform: "ensemble"
 max_batch_size: 16
 
@@ -47,7 +47,7 @@ ensemble_scheduling {
       }
     },
     {
-      model_name: "CLASSIFIER_CLASSIFY_PRE"
+      model_name: "CLASSIFIER_SMOKING"
       model_version: -1
       input_map {
         key: "input"
@@ -59,7 +59,7 @@ ensemble_scheduling {
       }
     },
     {
-      model_name: "CLASSIFIER_CLASSIFY_PRE_POSTPROCESS"
+      model_name: "CLASSIFIER_SMOKING_POSTPROCESS"
       model_version: -1
       input_map {
         key: "logits"

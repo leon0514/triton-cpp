@@ -1,4 +1,4 @@
-name: "CLASSIFIER_CLASSIFY_PRE_POSTPROCESS"
+name: "CLASSIFIER_SMOKING_POSTPROCESS"
 backend: "classifier_postprocess"
 max_batch_size: 16
 

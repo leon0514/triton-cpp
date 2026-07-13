@@ -1,4 +1,4 @@
-name: "CLASSIFIER_CLASSIFY_PRE"
+name: "CLASSIFIER_SMOKING"
 platform: "tensorrt_plan"
 max_batch_size: 16
 
