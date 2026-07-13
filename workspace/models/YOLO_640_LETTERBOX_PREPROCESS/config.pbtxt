@@ -1,4 +1,4 @@
-name: "YOLO_640_LETTERBOX_COMMON"
+name: "YOLO_640_LETTERBOX_PREPROCESS"
 backend: "preprocess"
 max_batch_size: 16
 

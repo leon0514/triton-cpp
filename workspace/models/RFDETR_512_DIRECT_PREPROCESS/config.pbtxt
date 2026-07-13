@@ -1,4 +1,4 @@
-name: "RFDETR_512_DIRECT_COMMON"
+name: "RFDETR_512_DIRECT_PREPROCESS"
 backend: "preprocess"
 max_batch_size: 16
 

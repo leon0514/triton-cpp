@@ -31,7 +31,7 @@ output [
 ensemble_scheduling {
   step [
     {
-      model_name: "CLASSIFIER_224_DIRECT_COMMON"
+      model_name: "CLASSIFIER_224_DIRECT_PREPROCESS"
       model_version: -1
       input_map {
         key: "raw_image"

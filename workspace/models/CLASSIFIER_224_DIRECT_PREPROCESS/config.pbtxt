@@ -1,4 +1,4 @@
-name: "CLASSIFIER_224_DIRECT_COMMON"
+name: "CLASSIFIER_224_DIRECT_PREPROCESS"
 backend: "preprocess"
 max_batch_size: 16
 

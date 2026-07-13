@@ -21,7 +21,7 @@ output [
 ensemble_scheduling {
   step [
     {
-      model_name: "YOLO_640_LETTERBOX_COMMON"
+      model_name: "YOLO_640_LETTERBOX_PREPROCESS"
       model_version: -1
       input_map {
         key: "raw_image"

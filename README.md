@@ -2,7 +2,7 @@
 
 本项目实现了多个 GPU 加速的 Triton Inference Server 自定义后端：
 
-- `YOLO_640_LETTERBOX_COMMON`：图像预处理（resize、letterbox、归一化、仿射变换矩阵）。
+- `YOLO_640_LETTERBOX_PREPROCESS`：图像预处理（resize、letterbox、归一化、仿射变换矩阵）。
 - `YOLO11_DET_PRE_POSTPROCESS` / `YOLO11_OBB_PRE_POSTPROCESS` / `YOLO11_POSE_PRE_POSTPROCESS` / `YOLO11_SEG_PRE_POSTPROCESS`：YOLO11 系列检测 / OBB / 姿态 / 分割后处理。
 - `YOLOV5_DET_PRE_POSTPROCESS`：YOLOv5 检测后处理。
 - `YOLO26_DET_PRE_POSTPROCESS`：YOLO26 one-to-one 检测头后处理。
@@ -68,8 +68,8 @@ docker run --rm --gpus all \
 ### 2. 复制产物到模型仓库
 
 ```bash
-cp build/libtriton_preprocess.so workspace/models/YOLO_640_LETTERBOX_COMMON/1/
-cp build/libtriton_preprocess.so workspace/models/RFDETR_512_DIRECT_COMMON/1/
+cp build/libtriton_preprocess.so workspace/models/YOLO_640_LETTERBOX_PREPROCESS/1/
+cp build/libtriton_preprocess.so workspace/models/RFDETR_512_DIRECT_PREPROCESS/1/
 cp build/libtriton_yolo11_postprocess.so workspace/models/YOLO11_DET_PRE_POSTPROCESS/1/
 cp build/libtriton_yolo11_obb_postprocess.so workspace/models/YOLO11_OBB_PRE_POSTPROCESS/1/
 cp build/libtriton_yolo11_pose_postprocess.so workspace/models/YOLO11_POSE_PRE_POSTPROCESS/1/
@@ -256,7 +256,7 @@ CUSTOM_LABELS
 
 ```
 workspace/models/
-├── YOLO_640_LETTERBOX_COMMON/
+├── YOLO_640_LETTERBOX_PREPROCESS/
 │   ├── config.pbtxt
 │   └── 1/libtriton_preprocess.so
 ├── YOLO11_DET_PRE/
@@ -272,10 +272,10 @@ workspace/models/
 └── ...
 ```
 
-### 1. 预处理配置（`YOLO_640_LETTERBOX_COMMON/config.pbtxt`）
+### 1. 预处理配置（`YOLO_640_LETTERBOX_PREPROCESS/config.pbtxt`）
 
 ```protobuf
-name: "YOLO_640_LETTERBOX_COMMON"
+name: "YOLO_640_LETTERBOX_PREPROCESS"
 backend: "preprocess"
 max_batch_size: 16
 
@@ -425,7 +425,7 @@ output [
 ensemble_scheduling {
   step [
     {
-      model_name: "YOLO_640_LETTERBOX_COMMON"
+      model_name: "YOLO_640_LETTERBOX_PREPROCESS"
       input_map { key: "raw_image" value: "raw_image" }
       output_map { key: "preprocessed_output" value: "preprocessed_output" }
       output_map { key: "transform_metadata" value: "transform_metadata" }
@@ -668,7 +668,7 @@ trtexec --onnx=RFDETR_DET_PRE-small.sim.onnx \
   --maxShapes=images:16x3x512x512
 ```
 
-RF-DETR 使用独立的预处理 `RFDETR_512_DIRECT_COMMON`（512x512、ImageNet 归一化、swap_rb）。
+RF-DETR 使用独立的预处理 `RFDETR_512_DIRECT_PREPROCESS`（512x512、ImageNet 归一化、swap_rb）。
 
 ### 转换后检查清单
 
@@ -676,7 +676,7 @@ RF-DETR 使用独立的预处理 `RFDETR_512_DIRECT_COMMON`（512x512、ImageNet
 2. `config.pbtxt` 中的 `dims` 与 ONNX 输出严格一致。
 3. `output_format`（`channel_first` / `anchor_first`）与 ONNX 排布一致。
 4. `score_activation` 与导出时是否做 sigmoid 一致（Ultralytics 默认导出通常已做 sigmoid，填 `none`）。
-5. 若修改了输入分辨率，同步修改 `YOLO_640_LETTERBOX_COMMON` 的 `target_width/target_height` 和后处理 `input_width/input_height`。
+5. 若修改了输入分辨率，同步修改 `YOLO_640_LETTERBOX_PREPROCESS` 的 `target_width/target_height` 和后处理 `input_width/input_height`。
 
 ---
 

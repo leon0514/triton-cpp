@@ -14,8 +14,8 @@
 #        docker compose up
 #
 # The backend shared libraries are embedded in the model repository:
-#   /models/YOLO_640_LETTERBOX_COMMON/1/libtriton_preprocess.so
-#   /models/RFDETR_512_DIRECT_COMMON/1/libtriton_preprocess.so
+#   /models/YOLO_640_LETTERBOX_PREPROCESS/1/libtriton_preprocess.so
+#   /models/RFDETR_512_DIRECT_PREPROCESS/1/libtriton_preprocess.so
 #   /models/YOLO11_DET_PRE_POSTPROCESS/1/libtriton_yolo11_postprocess.so
 #   /models/YOLO11_POSE_PRE_POSTPROCESS/1/libtriton_yolo11_pose_postprocess.so
 #   /models/YOLO11_OBB_PRE_POSTPROCESS/1/libtriton_yolo11_obb_postprocess.so
