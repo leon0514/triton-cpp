@@ -1,124 +1,141 @@
 <template>
   <div class="app">
     <header class="header">
-      <h1>🚀 Triton Display</h1>
-      <span class="subtitle">目标检测 / OBB / Pose / Seg / 分类 可视化</span>
+      <div class="header-left">
+        <h1>🚀 Triton Display</h1>
+        <span class="subtitle">目标检测 / OBB / Pose / Seg / 分类 可视化</span>
+      </div>
+      <nav class="nav-tabs">
+        <button
+          v-for="tab in tabs"
+          :key="tab.key"
+          class="nav-tab"
+          :class="{ active: currentView === tab.key }"
+          @click="currentView = tab.key"
+        >
+          {{ tab.label }}
+        </button>
+      </nav>
     </header>
 
     <div class="main">
-      <aside class="sidebar">
-        <section class="panel">
-          <h3>模型</h3>
-          <select v-model="selectedModel" :disabled="loading" @change="onModelChange">
-            <option value="">请选择 ensemble 模型</option>
-            <option v-for="m in models" :key="m.name" :value="m.name">
-              {{ m.name }}
-            </option>
-          </select>
-        </section>
-
-        <section class="panel">
-          <h3>图片</h3>
-          <div
-            class="dropzone"
-            @click="$refs.fileInput.click()"
-            @dragover.prevent
-            @drop.prevent="onDrop"
-          >
-            <span v-if="!imageFile">点击或拖拽上传图片</span>
-            <span v-else>{{ imageFile.name }}</span>
-          </div>
-          <input
-            ref="fileInput"
-            type="file"
-            accept="image/*"
-            style="display: none"
-            @change="onFileChange"
-          />
-        </section>
-
-        <template v-if="modelType !== 'classifier'">
+      <template v-if="currentView === 'inference'">
+        <aside class="sidebar">
           <section class="panel">
-            <h3>置信度阈值</h3>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              v-model.number="confThreshold"
-            />
-            <div class="value">{{ confThreshold.toFixed(2) }}</div>
+            <h3>模型</h3>
+            <select v-model="selectedModel" :disabled="loading" @change="onModelChange">
+              <option value="">请选择 ensemble 模型</option>
+              <option v-for="m in models" :key="m.name" :value="m.name">
+                {{ m.name }}
+              </option>
+            </select>
           </section>
 
           <section class="panel">
-            <h3>显示选项</h3>
-            <label><input type="checkbox" v-model="showBoxes" /> 检测框</label>
-            <label><input type="checkbox" v-model="showLabels" /> 标签</label>
-            <label><input type="checkbox" v-model="showScores" /> 分数</label>
-            <label><input type="checkbox" v-model="showPose" /> 姿态骨架</label>
-            <label><input type="checkbox" v-model="showSeg" /> 分割 Mask</label>
-          </section>
-
-          <section class="panel">
-            <h3>标签过滤</h3>
-            <div class="label-list">
-              <label v-for="label in availableLabels" :key="label.id">
-                <input
-                  type="checkbox"
-                  :value="label.id"
-                  v-model="selectedLabels"
-                />
-                <span
-                  class="color-dot"
-                  :style="{ backgroundColor: label.color }"
-                ></span>
-                {{ label.name }}
-              </label>
+            <h3>图片</h3>
+            <div
+              class="dropzone"
+              @click="$refs.fileInput.click()"
+              @dragover.prevent
+              @drop.prevent="onDrop"
+            >
+              <span v-if="!imageFile">点击或拖拽上传图片</span>
+              <span v-else>{{ imageFile.name }}</span>
             </div>
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/*"
+              style="display: none"
+              @change="onFileChange"
+            />
           </section>
-        </template>
 
-        <section class="panel">
-          <button
-            class="run-btn"
-            :disabled="!canRun || loading"
-            @click="runInference"
-          >
-            {{ loading ? '推理中...' : '运行推理' }}
-          </button>
-          <div v-if="error" class="error">{{ error }}</div>
-        </section>
-      </aside>
+          <template v-if="modelType !== 'classifier'">
+            <section class="panel">
+              <h3>置信度阈值</h3>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                v-model.number="confThreshold"
+              />
+              <div class="value">{{ confThreshold.toFixed(2) }}</div>
+            </section>
 
-      <div class="content">
-        <ClassResult
-          v-if="modelType === 'classifier'"
-          :result="result"
-          :class-names="classNames"
-          :image-src="imageUrl"
-        />
-        <CanvasViewer
-          v-else
-          :image-src="imageUrl"
-          :detections="filteredDetections"
-          :model-type="modelType"
-          :transform="result?.transform"
-          :show-boxes="showBoxes"
-          :show-labels="showLabels"
-          :show-scores="showScores"
-          :show-pose="showPose"
-          :show-seg="showSeg"
-          :class-names="classNames"
-        />
-      </div>
+            <section class="panel">
+              <h3>显示选项</h3>
+              <label><input type="checkbox" v-model="showBoxes" /> 检测框</label>
+              <label><input type="checkbox" v-model="showLabels" /> 标签</label>
+              <label><input type="checkbox" v-model="showScores" /> 分数</label>
+              <label><input type="checkbox" v-model="showPose" /> 姿态骨架</label>
+              <label><input type="checkbox" v-model="showSeg" /> 分割 Mask</label>
+            </section>
 
-      <aside class="rightbar">
-        <section class="panel full">
-          <h3>结果 JSON</h3>
-          <textarea class="json-box" readonly :value="resultJson"></textarea>
-          <button class="copy-btn" @click="copyResult">复制结果</button>
-        </section>
-      </aside>
+            <section class="panel">
+              <h3>标签过滤</h3>
+              <div class="label-list">
+                <label v-for="label in availableLabels" :key="label.id">
+                  <input
+                    type="checkbox"
+                    :value="label.id"
+                    v-model="selectedLabels"
+                  />
+                  <span
+                    class="color-dot"
+                    :style="{ backgroundColor: label.color }"
+                  ></span>
+                  {{ label.name }}
+                </label>
+              </div>
+            </section>
+          </template>
+
+          <section class="panel">
+            <button
+              class="run-btn"
+              :disabled="!canRun || loading"
+              @click="runInference"
+            >
+              {{ loading ? '推理中...' : '运行推理' }}
+            </button>
+            <div v-if="error" class="error">{{ error }}</div>
+          </section>
+        </aside>
+
+        <div class="content">
+          <ClassResult
+            v-if="modelType === 'classifier'"
+            :result="result"
+            :class-names="classNames"
+            :image-src="imageUrl"
+          />
+          <CanvasViewer
+            v-else
+            :image-src="imageUrl"
+            :detections="filteredDetections"
+            :model-type="modelType"
+            :transform="result?.transform"
+            :show-boxes="showBoxes"
+            :show-labels="showLabels"
+            :show-scores="showScores"
+            :show-pose="showPose"
+            :show-seg="showSeg"
+            :class-names="classNames"
+          />
+        </div>
+
+        <aside class="rightbar">
+          <section class="panel full">
+            <h3>结果 JSON</h3>
+            <textarea class="json-box" readonly :value="resultJson"></textarea>
+            <button class="copy-btn" @click="copyResult">复制结果</button>
+          </section>
+        </aside>
+      </template>
+
+      <Models v-else class="models-view" />
     </div>
   </div>
 </template>
@@ -127,8 +144,15 @@
 import { ref, computed, onMounted } from 'vue'
 import CanvasViewer from './components/CanvasViewer.vue'
 import ClassResult from './components/ClassResult.vue'
+import Models from './components/Models.vue'
 import { fetchModels, fetchLabels, infer } from './api'
 
+const tabs = [
+  { key: 'inference', label: '推理' },
+  { key: 'models', label: '模型管理' },
+]
+
+const currentView = ref('inference')
 const models = ref([])
 const selectedModel = ref('')
 const imageFile = ref(null)
@@ -289,6 +313,13 @@ body {
   padding: 12px 24px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
   gap: 16px;
 }
 
@@ -300,6 +331,32 @@ body {
 .subtitle {
   opacity: 0.8;
   font-size: 14px;
+}
+
+.nav-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.nav-tab {
+  padding: 8px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: transparent;
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.nav-tab:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.nav-tab.active {
+  background: white;
+  color: #1a237e;
+  border-color: white;
 }
 
 .main {
@@ -329,6 +386,12 @@ body {
   display: flex;
   justify-content: center;
   align-items: flex-start;
+}
+
+.models-view {
+  flex: 1;
+  overflow: hidden;
+  background: #f5f5f5;
 }
 
 .panel {

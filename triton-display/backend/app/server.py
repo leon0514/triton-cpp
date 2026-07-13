@@ -2,9 +2,13 @@
 FastAPI proxy for Triton inference visualization.
 
 Endpoints:
-  GET  /api/models          -> list READY ensemble models
-  POST /api/infer/{model}   -> run inference on uploaded image
-  GET  /health              -> health check
+  GET  /api/models                -> list READY ensemble models
+  GET  /api/models/all            -> list ALL models with ready state
+  GET  /api/models/{model}/config -> get model config
+  POST /api/models/{model}/load   -> load a model
+  POST /api/models/{model}/unload -> unload a model
+  POST /api/infer/{model}         -> run inference on uploaded image
+  GET  /health                    -> health check
 """
 
 import os
@@ -103,6 +107,60 @@ async def list_models():
 async def get_model_labels(model_name: str):
     """Convenience endpoint: labels for a specific model."""
     return await get_labels(model_name)
+
+
+@app.get("/api/models/all")
+async def list_all_models():
+    """Return all models in the repository with their ready state."""
+    try:
+        client = get_triton_client()
+        models = client.get_model_repository_index()
+        return {
+            "models": [
+                {
+                    "name": m["name"],
+                    "platform": m.get("platform", ""),
+                    "state": m.get("state", ""),
+                    "ready": m.get("state", "") == "READY",
+                }
+                for m in models
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Triton error: {e}")
+
+
+@app.get("/api/models/{model_name}/config")
+async def get_model_config(model_name: str):
+    """Return Triton model configuration (config.pbtxt parsed)."""
+    try:
+        client = get_triton_client()
+        config = client.get_model_config(model_name)
+        return {"name": model_name, "config": config}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Config for {model_name} not found: {e}")
+
+
+@app.post("/api/models/{model_name}/load")
+async def load_model(model_name: str):
+    """Load a model into Triton."""
+    try:
+        client = get_triton_client()
+        client.load_model(model_name)
+        return {"name": model_name, "action": "load", "status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to load {model_name}: {e}")
+
+
+@app.post("/api/models/{model_name}/unload")
+async def unload_model(model_name: str):
+    """Unload a model from Triton."""
+    try:
+        client = get_triton_client()
+        client.unload_model(model_name)
+        return {"name": model_name, "action": "unload", "status": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to unload {model_name}: {e}")
 
 
 @app.post("/api/infer/{model_name}")
