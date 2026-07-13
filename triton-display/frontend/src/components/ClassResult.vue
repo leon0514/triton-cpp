@@ -65,8 +65,8 @@ const items = computed(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 24px;
-  max-width: 800px;
+  gap: 20px;
+  max-width: 720px;
   width: 100%;
 }
 
@@ -76,15 +76,15 @@ const items = computed(() => {
   align-items: center;
   max-width: 100%;
   background: #fff;
-  border-radius: 8px;
+  border-radius: 10px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   padding: 12px;
 }
 
 .image-preview img {
   max-width: 100%;
-  max-height: 60vh;
-  border-radius: 4px;
+  max-height: 55vh;
+  border-radius: 6px;
   object-fit: contain;
 }
 
@@ -94,36 +94,41 @@ const items = computed(() => {
   display: flex;
   justify-content: center;
   align-items: center;
-  color: #888;
-  background: #f5f5f5;
-  border-radius: 4px;
+  color: #9aa0a6;
+  background: #f8f9fa;
+  border-radius: 6px;
+  font-size: 14px;
 }
 
 .predictions {
   width: 100%;
   background: #fff;
-  border-radius: 8px;
+  border-radius: 10px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   padding: 20px;
 }
 
 .predictions h3 {
   margin: 0 0 16px 0;
-  font-size: 16px;
-  color: #333;
+  font-size: 14px;
+  font-weight: 600;
+  color: #5f6368;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .empty {
-  color: #888;
+  color: #9aa0a6;
   text-align: center;
-  padding: 12px 0;
+  padding: 16px 0;
+  font-size: 14px;
 }
 
 .pred-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 12px 0;
+  margin: 14px 0;
   font-size: 14px;
 }
 
@@ -131,31 +136,33 @@ const items = computed(() => {
   width: 120px;
   flex-shrink: 0;
   text-align: right;
-  color: #333;
+  color: #3c4043;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: 500;
 }
 
 .bar-bg {
   flex: 1;
-  height: 18px;
-  background: #e0e0e0;
-  border-radius: 9px;
+  height: 16px;
+  background: #e8eaed;
+  border-radius: 8px;
   overflow: hidden;
 }
 
 .bar {
   height: 100%;
-  border-radius: 9px;
-  transition: width 0.3s ease;
+  border-radius: 8px;
+  transition: width 0.4s ease;
 }
 
 .score {
-  width: 60px;
+  width: 52px;
   flex-shrink: 0;
   text-align: right;
-  font-weight: 500;
-  color: #555;
+  font-weight: 600;
+  color: #5f6368;
+  font-size: 13px;
 }
 </style>

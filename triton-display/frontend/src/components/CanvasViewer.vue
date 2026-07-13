@@ -273,13 +273,18 @@ watch(
   position: relative;
   display: inline-block;
   max-width: 100%;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  padding: 12px;
 }
 
 canvas {
+  display: block;
   max-width: 100%;
-  max-height: calc(100vh - 80px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  background: white;
+  max-height: calc(100vh - 100px);
+  border-radius: 6px;
+  background: #fafafa;
 }
 
 .placeholder {
@@ -287,7 +292,9 @@ canvas {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  color: #999;
-  font-size: 16px;
+  color: #9aa0a6;
+  font-size: 15px;
+  text-align: center;
+  padding: 0 20px;
 }
 </style>
