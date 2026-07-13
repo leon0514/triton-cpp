@@ -36,7 +36,6 @@
             <th class="col-status">状态</th>
             <th class="col-name">模型名称</th>
             <th class="col-type">类型</th>
-            <th class="col-platform">平台</th>
             <th class="col-state">运行状态</th>
             <th class="col-actions">操作</th>
           </tr>
@@ -58,7 +57,6 @@
                 {{ modelTypeLabel(m.name) }}
               </span>
             </td>
-            <td class="col-platform">{{ m.platform || '—' }}</td>
             <td class="col-state">
               <span class="state-badge" :class="m.ready ? 'ready' : 'offline'">
                 {{ m.state || 'UNKNOWN' }}
@@ -92,7 +90,7 @@
             </td>
           </tr>
           <tr v-if="sortedModels.length === 0">
-            <td colspan="6" class="empty-cell">未找到匹配的模型</td>
+            <td colspan="5" class="empty-cell">未找到匹配的模型</td>
           </tr>
         </tbody>
       </table>
@@ -409,10 +407,6 @@ onMounted(loadModels)
 
 .col-type {
   width: 120px;
-}
-
-.col-platform {
-  width: 140px;
 }
 
 .col-state {
