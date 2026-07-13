@@ -21,7 +21,8 @@
 4. [模型操作](#模型操作)
 5. [模型配置](#模型配置)
 6. [模型转换](#模型转换)
-7. [测试](#测试)
+7. [坐标回映射](#坐标回映射)
+8. [测试](#测试)
 
 ---
 
@@ -474,7 +475,30 @@ parameters: {
 
 通用流程：**PyTorch `.pt` -> ONNX -> TensorRT `.plan`**。
 
-转换需要进入 Triton 容器或本地具备 `ultralytics`、`onnx`、`tensorrt` / `trtexec` 的环境。
+> **推荐在 Triton Docker 容器内执行导出**，这样无需在宿主机安装 TensorRT / CUDA 工具链。下面各小节只给出 `trtexec` 命令；若使用 Docker，请把模型目录挂载进去，例如：
+>
+> ```bash
+> docker run --rm --gpus all \
+>   -v "$(pwd)/workspace/models/<model_name>/1":/models \
+>   nvcr.io/nvidia/tritonserver:25.01-py3 \
+>   /usr/src/tensorrt/bin/trtexec \
+>     --onnx=/models/model.onnx \
+>     --saveEngine=/models/model.plan \
+>     --fp16 \
+>     --skipInference
+> ```
+>
+> 具体 `--minShapes/--optShapes/--maxShapes` 等参数见下面各模型小节。
+>
+> 也可以直接进入容器交互式执行（便于批量转换）：
+>
+> ```bash
+> docker run --rm --gpus all -it \
+>   -v "$(pwd)/workspace/models":/models \
+>   nvcr.io/nvidia/tritonserver:25.01-py3 bash
+> cd /models/<model_name>/1
+> /usr/src/tensorrt/bin/trtexec ...
+> ```
 
 ### 1. YOLO11 检测
 
@@ -618,8 +642,7 @@ YOLO26 输出为 `[batch, 300, 6]`，后处理无需 NMS。
 cd workspace/models/rfdetr_seg/1
 
 # ONNX -> TensorRT plan（input 384x384，max batch 16，FP16）
-/usr/src/tensorrt/bin/trtexec \
-  --onnx=model.onnx \
+trtexec --onnx=model.onnx \
   --saveEngine=model.plan \
   --minShapes=input:1x3x384x384 \
   --optShapes=input:8x3x384x384 \
@@ -628,15 +651,9 @@ cd workspace/models/rfdetr_seg/1
   --skipInference
 ```
 
-或直接使用模型目录下的脚本：
-
-```bash
-bash workspace/models/rfdetr_seg/convert_rfdetr_seg.sh
-```
-
 `config.pbtxt` 已配置为 `platform: "tensorrt_plan"`，输出 `dets`/`labels`/`masks`。
 
-### 7. RF-DETR
+### 8. RF-DETR
 
 ```bash
 cd workspace/models/rfdetr/1
@@ -660,6 +677,96 @@ RF-DETR 使用独立的预处理 `preprocess_rfdetr`（512x512、ImageNet 归一
 3. `output_format`（`channel_first` / `anchor_first`）与 ONNX 排布一致。
 4. `score_activation` 与导出时是否做 sigmoid 一致（Ultralytics 默认导出通常已做 sigmoid，填 `none`）。
 5. 若修改了输入分辨率，同步修改 `preprocess` 的 `target_width/target_height` 和后处理 `input_width/input_height`。
+
+---
+
+## 坐标回映射
+
+预处理会随 `preprocessed_output` 一起返回 `transform_metadata`，它是 6 个 float 组成的 **d2i（dst -> image）** 逆变换矩阵，用于将模型输入坐标系上的点映射回原始图像坐标系。
+
+矩阵布局（行优先 2×3）：
+
+```
+[ d2i[0]  d2i[1]  d2i[2] ]   [ x ]   [ x_orig ]
+[ d2i[3]  d2i[4]  d2i[5] ] * [ y ] = [ y_orig ]
+                             [ 1 ]
+```
+
+即：
+
+```python
+x_orig = d2i[0] * x + d2i[1] * y + d2i[2]
+y_orig = d2i[3] * x + d2i[4] * y + d2i[5]
+```
+
+### 检测框回映射
+
+```python
+import numpy as np
+
+def map_box_to_original(box, d2i):
+    """
+    box: [x1, y1, x2, y2]，模型输入坐标系（如 384x384）
+    d2i: 长度为 6 的 list/array，由 transform_metadata 得到
+    返回: [x1, y1, x2, y2]，原始图像坐标系
+    """
+    x1, y1, x2, y2 = box
+    pts = np.array([[x1, y1],
+                    [x2, y1],
+                    [x2, y2],
+                    [x1, y2]], dtype=np.float32)
+    M = np.array([[d2i[0], d2i[1], d2i[2]],
+                  [d2i[3], d2i[4], d2i[5]]], dtype=np.float32)
+    orig_pts = (M[:, :2] @ pts.T).T + M[:, 2]
+    x1o, y1o = orig_pts.min(axis=0)
+    x2o, y2o = orig_pts.max(axis=0)
+    return [x1o, y1o, x2o, y2o]
+
+# 使用示例（假设已从 Triton 拿到结果）
+num_dets = res.as_numpy("num_dets")[0, 0]
+boxes = res.as_numpy("detection_boxes")[0]       # [max_dets, 4]
+classes = res.as_numpy("detection_classes")[0]
+scores = res.as_numpy("detection_scores")[0]
+d2i = res.as_numpy("transform_metadata")[0]      # [6]
+
+orig_boxes = [map_box_to_original(boxes[i], d2i)
+              for i in range(num_dets)]
+for i in range(num_dets):
+    print(f"cls={classes[i]} score={scores[i]:.3f} box={orig_boxes[i]}")
+```
+
+### 分割 Mask 回映射
+
+后处理输出的 `detection_masks` 已按 `mask_offsets` / `mask_shapes` 裁剪并 1D 拼接。每个 mask 像素 `(row, col)` 先映射到模型输入坐标，再映射回原始图像：
+
+```python
+def map_mask_pixel_to_original(box_in, mask_shape, d2i, row, col):
+    """
+    box_in:    [x1, y1, x2, y2]，模型输入坐标系
+    mask_shape:[mask_h, mask_w]
+    """
+    x1, y1, x2, y2 = box_in
+    mh, mw = mask_shape
+    x_in = x1 + col * (x2 - x1) / max(mw, 1)
+    y_in = y1 + row * (y2 - y1) / max(mh, 1)
+    x_orig = d2i[0] * x_in + d2i[1] * y_in + d2i[2]
+    y_orig = d2i[3] * x_in + d2i[4] * y_in + d2i[5]
+    return x_orig, y_orig
+
+# 取第 k 个检测的 mask
+k = 0
+mask_h, mask_w = mask_shapes[0, k]
+offset = mask_offsets[0, k]
+mask = detection_masks[0, offset:offset + mask_h * mask_w].reshape(mask_h, mask_w)
+
+# 将 mask 轮廓点映射回原始图像
+contour_pts_orig = [
+    map_mask_pixel_to_original(boxes[k], [mask_h, mask_w], d2i, i, j)
+    for i in range(mask_h) for j in range(mask_w) if mask[i, j] > 0.5
+]
+```
+
+> 提示：若只需要在原图上绘制结果，通常先把 box / mask 映射回原始分辨率，再用 OpenCV/PIL 绘制即可。
 
 ---
 
