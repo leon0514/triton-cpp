@@ -77,9 +77,9 @@ void Yolo11Postprocess::forward(
                               ? cub_sort_temp_storage_workspace_.gpu()
                               : nullptr;
 
-    fprintf(stderr, "[yolo11_postprocess] apply_sigmoid=%d conf_thresh=%f iou_thresh=%f\n",
-            (int)config_.apply_sigmoid, config_.confidence_threshold, config_.iou_threshold);
-    fflush(stderr);
+    // fprintf(stderr, "[yolo11_postprocess] apply_sigmoid=%d conf_thresh=%f iou_thresh=%f\n",
+    //         (int)config_.apply_sigmoid, config_.confidence_threshold, config_.iou_threshold);
+    // fflush(stderr);
     yolo11_postprocess_gpu(
         input,
         input_is_half,

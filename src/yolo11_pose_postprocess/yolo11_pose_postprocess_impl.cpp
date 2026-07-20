@@ -55,14 +55,14 @@ Yolo11PosePostprocess::Yolo11PosePostprocess(const Yolo11PosePostprocessConfig &
         cub_sort_temp_storage_workspace_.gpu(cub_sort_temp_storage_bytes_);
     }
 
-    fprintf(stderr,
-            "[yolo11_pose_postprocess] num_classes=%d num_keypoints=%d keypoint_dim=%d "
-            "channels=%d apply_sigmoid=%d apply_sigmoid_keypoints=%d conf_thresh=%f iou_thresh=%f\n",
-            config_.num_classes, config_.num_keypoints, config_.keypoint_dim,
-            num_channels,
-            (int)config_.apply_sigmoid, (int)config_.apply_sigmoid_keypoints,
-            config_.confidence_threshold, config_.iou_threshold);
-    fflush(stderr);
+    // fprintf(stderr,
+    //         "[yolo11_pose_postprocess] num_classes=%d num_keypoints=%d keypoint_dim=%d "
+    //         "channels=%d apply_sigmoid=%d apply_sigmoid_keypoints=%d conf_thresh=%f iou_thresh=%f\n",
+    //         config_.num_classes, config_.num_keypoints, config_.keypoint_dim,
+    //         num_channels,
+    //         (int)config_.apply_sigmoid, (int)config_.apply_sigmoid_keypoints,
+    //         config_.confidence_threshold, config_.iou_threshold);
+    // fflush(stderr);
 }
 
 void Yolo11PosePostprocess::forward(

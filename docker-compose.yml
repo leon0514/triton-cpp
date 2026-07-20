@@ -29,7 +29,6 @@ services:
   triton:
     image: nvcr.io/nvidia/tritonserver:25.01-py3
     container_name: triton-backends
-    ipc: host
     ports:
       - "48000:8000"   # HTTP
       - "48001:8001"   # gRPC
@@ -37,6 +36,7 @@ services:
     env_file:
       - .env
     volumes:
+      - /dev/shm/${SHM_NAMESPACE}:/dev/shm
       # Model repository (config.pbtxt + backend .so + model plan)
       - ./workspace/models:/models:ro
       # On-demand loading entrypoint script

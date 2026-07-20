@@ -77,12 +77,12 @@ void Yolo11ObbPostprocess::forward(
                               ? cub_sort_temp_storage_workspace_.gpu()
                               : nullptr;
 
-    fprintf(stderr,
-            "[yolo11_obb_postprocess] apply_sigmoid=%d conf_thresh=%f iou_thresh=%f "
-            "num_classes=%d\n",
-            (int)config_.apply_sigmoid, config_.confidence_threshold,
-            config_.iou_threshold, config_.num_classes);
-    fflush(stderr);
+    // fprintf(stderr,
+    //         "[yolo11_obb_postprocess] apply_sigmoid=%d conf_thresh=%f iou_thresh=%f "
+    //         "num_classes=%d\n",
+    //         (int)config_.apply_sigmoid, config_.confidence_threshold,
+    //         config_.iou_threshold, config_.num_classes);
+    // fflush(stderr);
 
     yolo11_obb_postprocess_gpu(
         input,

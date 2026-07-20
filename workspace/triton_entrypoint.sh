@@ -10,7 +10,7 @@ set -e
 ARGS=(
   tritonserver
   --model-repository=/models
-  --log-verbose=1
+  --log-verbose=0
   --exit-on-error=false
   --strict-readiness=false
 )

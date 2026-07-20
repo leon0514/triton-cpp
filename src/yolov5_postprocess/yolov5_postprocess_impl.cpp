@@ -77,10 +77,10 @@ void Yolov5Postprocess::forward(
                               ? cub_sort_temp_storage_workspace_.gpu()
                               : nullptr;
 
-    fprintf(stderr, "[yolov5_postprocess] has_objectness=%d apply_sigmoid=%d conf_thresh=%f iou_thresh=%f\n",
-            (int)config_.has_objectness, (int)config_.apply_sigmoid,
-            config_.confidence_threshold, config_.iou_threshold);
-    fflush(stderr);
+    // fprintf(stderr, "[yolov5_postprocess] has_objectness=%d apply_sigmoid=%d conf_thresh=%f iou_thresh=%f\n",
+    //         (int)config_.has_objectness, (int)config_.apply_sigmoid,
+    //         config_.confidence_threshold, config_.iou_threshold);
+    // fflush(stderr);
 
     yolov5_postprocess_gpu(
         input,
