@@ -710,62 +710,75 @@ TRITONBACKEND_ModelInstanceExecute(
         }
     }
 
-    // 4. 使用实例预分配的输入 workspace
-    uint8_t *output0_base_ptr = instance_state->output0_workspace_.gpu(total_output0_bytes);
-    if (total_output0_bytes > 0 && output0_base_ptr == nullptr)
-    {
-        guard.SetError(TRITONSERVER_ErrorNew(
-            TRITONSERVER_ERROR_INTERNAL, "Failed to allocate output0 device workspace"));
-        return nullptr;
-    }
-
-    uint8_t *output1_base_ptr = instance_state->output1_workspace_.gpu(total_output1_bytes);
-    if (total_output1_bytes > 0 && output1_base_ptr == nullptr)
-    {
-        guard.SetError(TRITONSERVER_ErrorNew(
-            TRITONSERVER_ERROR_INTERNAL, "Failed to allocate output1 device workspace"));
-        return nullptr;
-    }
-
-    // 5. 拷贝所有输入到连续 device workspace
-    uint64_t output0_offset = 0;
-    uint64_t output1_offset = 0;
+    // 4. 准备 device 输入：
+    //    单个 request 且两个输入都已在 GPU 上时（ensemble 链中上游模型的输出即为此情形），
+    //    直接透传指针零拷贝；否则统一拷贝到实例预分配的连续 workspace。
+    const void *d_output0 = nullptr;
+    const void *d_output1 = nullptr;
     bool input_is_half = false;
-    for (const auto &info : infos)
+
+    if (request_num == 1 && infos[0].output0_on_device && infos[0].output1_on_device)
     {
-        uint8_t *dst0 = output0_base_ptr + output0_offset;
-        cudaMemcpyKind kind0 = info.output0_on_device
-                                   ? cudaMemcpyDeviceToDevice
-                                   : cudaMemcpyHostToDevice;
-        cudaError_t err0 = cudaMemcpyAsync(
-            dst0, info.output0_base, info.total_output0_bytes, kind0, stream);
-        if (err0 != cudaSuccess)
-        {
-            guard.SetError(TRITONSERVER_ErrorNew(
-                TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(err0)));
-            return nullptr;
-        }
-        output0_offset += info.total_output0_bytes;
-
-        uint8_t *dst1 = output1_base_ptr + output1_offset;
-        cudaMemcpyKind kind1 = info.output1_on_device
-                                   ? cudaMemcpyDeviceToDevice
-                                   : cudaMemcpyHostToDevice;
-        cudaError_t err1 = cudaMemcpyAsync(
-            dst1, info.output1_base, info.total_output1_bytes, kind1, stream);
-        if (err1 != cudaSuccess)
-        {
-            guard.SetError(TRITONSERVER_ErrorNew(
-                TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(err1)));
-            return nullptr;
-        }
-        output1_offset += info.total_output1_bytes;
+        d_output0      = infos[0].output0_base;
+        d_output1      = infos[0].output1_base;
+        input_is_half  = (infos[0].output0_datatype == TRITONSERVER_TYPE_FP16);
     }
+    else
+    {
+        uint8_t *output0_base_ptr = instance_state->output0_workspace_.gpu(total_output0_bytes);
+        if (total_output0_bytes > 0 && output0_base_ptr == nullptr)
+        {
+            guard.SetError(TRITONSERVER_ErrorNew(
+                TRITONSERVER_ERROR_INTERNAL, "Failed to allocate output0 device workspace"));
+            return nullptr;
+        }
 
-    input_is_half = (infos[0].output0_datatype == TRITONSERVER_TYPE_FP16);
+        uint8_t *output1_base_ptr = instance_state->output1_workspace_.gpu(total_output1_bytes);
+        if (total_output1_bytes > 0 && output1_base_ptr == nullptr)
+        {
+            guard.SetError(TRITONSERVER_ErrorNew(
+                TRITONSERVER_ERROR_INTERNAL, "Failed to allocate output1 device workspace"));
+            return nullptr;
+        }
 
-    const void *d_output0 = output0_base_ptr;
-    const void *d_output1 = output1_base_ptr;
+        // 5. 拷贝所有输入到连续 device workspace
+        uint64_t output0_offset = 0;
+        uint64_t output1_offset = 0;
+        for (const auto &info : infos)
+        {
+            uint8_t *dst0 = output0_base_ptr + output0_offset;
+            cudaMemcpyKind kind0 = info.output0_on_device
+                                       ? cudaMemcpyDeviceToDevice
+                                       : cudaMemcpyHostToDevice;
+            cudaError_t err0 = cudaMemcpyAsync(
+                dst0, info.output0_base, info.total_output0_bytes, kind0, stream);
+            if (err0 != cudaSuccess)
+            {
+                guard.SetError(TRITONSERVER_ErrorNew(
+                    TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(err0)));
+                return nullptr;
+            }
+            output0_offset += info.total_output0_bytes;
+
+            uint8_t *dst1 = output1_base_ptr + output1_offset;
+            cudaMemcpyKind kind1 = info.output1_on_device
+                                       ? cudaMemcpyDeviceToDevice
+                                       : cudaMemcpyHostToDevice;
+            cudaError_t err1 = cudaMemcpyAsync(
+                dst1, info.output1_base, info.total_output1_bytes, kind1, stream);
+            if (err1 != cudaSuccess)
+            {
+                guard.SetError(TRITONSERVER_ErrorNew(
+                    TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(err1)));
+                return nullptr;
+            }
+            output1_offset += info.total_output1_bytes;
+        }
+
+        input_is_half = (infos[0].output0_datatype == TRITONSERVER_TYPE_FP16);
+        d_output0     = output0_base_ptr;
+        d_output1     = output1_base_ptr;
+    }
 
     // 6. 执行后处理
     postprocessor->forward(

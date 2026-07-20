@@ -12,7 +12,8 @@
 namespace yolo11_seg_postprocess
 {
 
-// 单个候选框，保留对应 anchor 索引以便后续读取 mask 系数
+// 单个候选框（32 字节对齐，CUB 排序搬运和结构体拷贝走对齐事务），
+// 保留对应 anchor 索引以便后续读取 mask 系数
 struct Candidate
 {
     float x1       = 0.0f;
@@ -24,6 +25,8 @@ struct Candidate
     int batch_idx  = 0;
     int anchor_idx = 0;  // 对应 output0 中的 anchor 索引
 };
+
+static_assert(sizeof(Candidate) == 32, "Candidate must stay 32-byte aligned");
 
 /**
  * @brief 对 YOLO11-seg 模型原始输出执行 decode + confidence 过滤 + NMS + mask 生成。
@@ -56,8 +59,8 @@ struct Candidate
  * @param iou_thresh            NMS IoU 阈值
  * @param max_detections        每张图最多保留的检测框数
  * @param max_candidates        每张图最多进入 NMS 的候选框数
- * @param d_counts              每张图过滤后的候选数（device int[total_images]，输出）
- * @param d_candidates          候选框缓冲区（device Candidate[total_images * max_candidates]，输出）
+ * @param d_counts              每张图过滤后的候选数（device int[total_images]，输出，
+ *                              数值可能超过 max_candidates，使用时需自行 min 封顶）
  * @param d_num_dets            每张图最终检测数（device int[total_images]，输出）
  * @param d_boxes               检测框输出缓冲区（device float[total_images * max_detections * 4]）
  * @param d_scores              分数输出缓冲区（device float[total_images * max_detections]）
@@ -68,11 +71,16 @@ struct Candidate
  * @param d_mask_shapes         每张图每个检测框的 mask 形状 (h, w)
  *                              （device int[total_images * max_detections * 2]，0 表示无 mask）
  * @param d_det_to_cand_idx     每个保留检测框对应的候选框索引（device int[total_images * max_detections]）
- * @param d_sort_keys_in        CUB 排序输入 key 缓冲区（device float[total_images * max_candidates]）
+ * @param d_sort_keys_in        CUB 排序输入 key 缓冲区（device float[total_images * max_candidates]，
+ *                              由 decode kernel 直接写入）
  * @param d_sort_keys_out       CUB 排序输出 key 缓冲区（device float[total_images * max_candidates]）
- * @param d_sort_candidates_in  CUB 排序输入 value 缓冲区（device Candidate[total_images * max_candidates]）
- * @param d_sort_candidates_out CUB 排序输出 value 缓冲区（device Candidate[total_images * max_candidates]）
- * @param d_sort_offsets        分段排序偏移（device int[total_images + 1]）
+ * @param d_sort_candidates_in  CUB 排序输入 value 缓冲区（device Candidate[total_images * max_candidates]，
+ *                              由 decode kernel 直接写入）
+ * @param d_sort_candidates_out CUB 排序输出 value 缓冲区（device Candidate[total_images * max_candidates]，
+ *                              NMS 与 mask 计算直接读取）
+ * @param d_sort_begin_offsets  每段起始偏移（device int[total_images]，由本函数内 kernel 填写）
+ * @param d_sort_end_offsets    每段结束偏移（device int[total_images]，由本函数内 kernel 填写，
+ *                              取 begin + min(count, max_candidates)，段间空隙不参与排序）
  * @param d_cub_temp            CUB 临时存储（可为 nullptr 当大小为 0）
  * @param cub_temp_storage_bytes CUB 临时存储字节数
  * @param stream                CUDA 流
@@ -100,7 +108,6 @@ void yolo11_seg_postprocess_gpu(
     int max_detections,
     int max_candidates,
     int *d_counts,
-    Candidate *d_candidates,
     int *d_num_dets,
     float *d_boxes,
     float *d_scores,
@@ -113,7 +120,8 @@ void yolo11_seg_postprocess_gpu(
     float *d_sort_keys_out,
     Candidate *d_sort_candidates_in,
     Candidate *d_sort_candidates_out,
-    int *d_sort_offsets,
+    int *d_sort_begin_offsets,
+    int *d_sort_end_offsets,
     void *d_cub_temp,
     size_t cub_temp_storage_bytes,
     cudaStream_t stream);

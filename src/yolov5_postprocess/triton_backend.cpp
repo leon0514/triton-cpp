@@ -626,39 +626,48 @@ TRITONBACKEND_ModelInstanceExecute(
         }
     }
 
-    // 4. 使用实例预分配的输入 workspace（容量不足时会自动扩容）
-    uint8_t *input_base_ptr = instance_state->input_workspace_.gpu(total_input_bytes);
-    if (total_input_bytes > 0 && input_base_ptr == nullptr)
-    {
-        guard.SetError(TRITONSERVER_ErrorNew(
-            TRITONSERVER_ERROR_INTERNAL, "Failed to allocate input device workspace"));
-        return nullptr;
-    }
-
-    // 5. 拷贝所有输入到连续 device workspace
-    uint64_t input_offset = 0;
+    // 4. 准备 device 输入：
+    //    单个 request 且输入已在 GPU 上时（ensemble 链中上游模型的输出即为此情形），
+    //    直接透传指针零拷贝；否则统一拷贝到实例预分配的连续 workspace。
+    const void *d_input = nullptr;
     bool input_is_half = false;
-    for (const auto &info : infos)
+
+    if (request_num == 1 && infos[0].input_on_device)
     {
-        uint8_t *dst = input_base_ptr + input_offset;
-        cudaMemcpyKind kind = info.input_on_device
-                                  ? cudaMemcpyDeviceToDevice
-                                  : cudaMemcpyHostToDevice;
-        cudaError_t err = cudaMemcpyAsync(
-            dst, info.input_base, info.total_input_bytes, kind, stream);
-        if (err != cudaSuccess)
+        d_input        = infos[0].input_base;
+        input_is_half  = (infos[0].input_datatype == TRITONSERVER_TYPE_FP16);
+    }
+    else
+    {
+        uint8_t *input_base_ptr = instance_state->input_workspace_.gpu(total_input_bytes);
+        if (total_input_bytes > 0 && input_base_ptr == nullptr)
         {
             guard.SetError(TRITONSERVER_ErrorNew(
-                TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(err)));
+                TRITONSERVER_ERROR_INTERNAL, "Failed to allocate input device workspace"));
             return nullptr;
         }
-        input_offset += info.total_input_bytes;
+
+        uint64_t input_offset = 0;
+        for (const auto &info : infos)
+        {
+            uint8_t *dst = input_base_ptr + input_offset;
+            cudaMemcpyKind kind = info.input_on_device
+                                      ? cudaMemcpyDeviceToDevice
+                                      : cudaMemcpyHostToDevice;
+            cudaError_t err = cudaMemcpyAsync(
+                dst, info.input_base, info.total_input_bytes, kind, stream);
+            if (err != cudaSuccess)
+            {
+                guard.SetError(TRITONSERVER_ErrorNew(
+                    TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(err)));
+                return nullptr;
+            }
+            input_offset += info.total_input_bytes;
+        }
+
+        input_is_half = (infos[0].input_datatype == TRITONSERVER_TYPE_FP16);
+        d_input       = input_base_ptr;
     }
-
-    // 确定输入数据类型
-    input_is_half = (infos[0].input_datatype == TRITONSERVER_TYPE_FP16);
-
-    const void *d_input = input_base_ptr;
 
     // 6. 执行后处理（输出写入实例预分配的 GPU workspace）
     postprocessor->forward(

@@ -64,32 +64,7 @@ __device__ __forceinline__ float get_value(
 }
 
 // ------------------------------------------------------------------
-// 初始化候选框缓冲区（避免未初始化脏数据参与排序）
-// ------------------------------------------------------------------
-__global__ void init_candidates_kernel(
-    Candidate *d_candidates,
-    int total_images,
-    int max_candidates)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = total_images * max_candidates;
-    for (int i = idx; i < total; i += blockDim.x * gridDim.x)
-    {
-        Candidate cand;
-        cand.cx        = 0.0f;
-        cand.cy        = 0.0f;
-        cand.w         = 0.0f;
-        cand.h         = 0.0f;
-        cand.angle     = 0.0f;
-        cand.score     = -1.0f;         // 无效候选，NMS 会跳过
-        cand.class_id  = 0;
-        cand.batch_idx = i / max_candidates;
-        d_candidates[i] = cand;
-    }
-}
-
-// ------------------------------------------------------------------
-// Decode + 置信度过滤 kernel
+// Decode + 置信度过滤 kernel（候选直接写入 CUB 排序输入缓冲区）
 // ------------------------------------------------------------------
 __global__ void decode_filter_kernel(
     const void *input,
@@ -102,7 +77,8 @@ __global__ void decode_filter_kernel(
     float conf_thresh,
     int max_candidates,
     int *d_counts,
-    Candidate *d_candidates)
+    float *d_sort_keys,
+    Candidate *d_sort_candidates)
 {
     const int total_channels = 5 + num_classes;
 
@@ -112,18 +88,8 @@ __global__ void decode_filter_kernel(
         int batch_idx = index / num_anchors;
         int anchor    = index % num_anchors;
 
-        // 原版 Ultralytics ONNX 输出顺序：box(4) + cls(num_classes) + angle(1)
-        // 几何量已完成 grid/stride 解码，类别与角度均已通过 Sigmoid/解码
-        float cx = get_value(input, input_is_half, anchors_first, batch_idx, anchor, 0,
-                             total_channels, num_anchors);
-        float cy = get_value(input, input_is_half, anchors_first, batch_idx, anchor, 1,
-                             total_channels, num_anchors);
-        float w  = get_value(input, input_is_half, anchors_first, batch_idx, anchor, 2,
-                             total_channels, num_anchors);
-        float h  = get_value(input, input_is_half, anchors_first, batch_idx, anchor, 3,
-                             total_channels, num_anchors);
-
-        // 找最大类别分数（原版导出已做 Sigmoid）
+        // 先做类别 argmax + 置信度过滤：被阈值丢弃的 anchor（通常占绝大多数）
+        // 不再读取框坐标和角度，省掉 5 次读取。
         float best_score = 0.0f;
         int best_class   = 0;
         for (int c = 0; c < num_classes; ++c)
@@ -141,10 +107,6 @@ __global__ void decode_filter_kernel(
             }
         }
 
-        // 角度通道：原版 Ultralytics ONNX 导出后已是 (sigmoid(raw)-0.25)*π
-        float angle = get_value(input, input_is_half, anchors_first, batch_idx, anchor,
-                                4 + num_classes, total_channels, num_anchors);
-
         if (best_score < conf_thresh)
         {
             continue;
@@ -160,6 +122,21 @@ __global__ void decode_filter_kernel(
             continue;
         }
 
+        // 原版 Ultralytics ONNX 输出顺序：box(4) + cls(num_classes) + angle(1)
+        // 几何量已完成 grid/stride 解码，类别与角度均已通过 Sigmoid/解码
+        float cx = get_value(input, input_is_half, anchors_first, batch_idx, anchor, 0,
+                             total_channels, num_anchors);
+        float cy = get_value(input, input_is_half, anchors_first, batch_idx, anchor, 1,
+                             total_channels, num_anchors);
+        float w  = get_value(input, input_is_half, anchors_first, batch_idx, anchor, 2,
+                             total_channels, num_anchors);
+        float h  = get_value(input, input_is_half, anchors_first, batch_idx, anchor, 3,
+                             total_channels, num_anchors);
+
+        // 角度通道：原版 Ultralytics ONNX 导出后已是 (sigmoid(raw)-0.25)*π
+        float angle = get_value(input, input_is_half, anchors_first, batch_idx, anchor,
+                                4 + num_classes, total_channels, num_anchors);
+
         Candidate cand;
         cand.cx       = cx;
         cand.cy       = cy;
@@ -170,25 +147,32 @@ __global__ void decode_filter_kernel(
         cand.class_id = best_class;
         cand.batch_idx = batch_idx;
 
-        d_candidates[batch_idx * max_candidates + old] = cand;
+        // 直接写入 CUB 排序输入缓冲区，省掉中间 candidates 缓冲和 prepare_sort 拷贝
+        int out_idx = batch_idx * max_candidates + old;
+        d_sort_keys[out_idx]       = best_score;
+        d_sort_candidates[out_idx] = cand;
     }
 }
 
 // ------------------------------------------------------------------
-// 从候选框中提取 score/key 并复制 value，供 CUB 分段排序使用
+// 由 counts 计算 CUB 分段排序的 [begin, end) 偏移：
+// 每段只覆盖实际候选（段间空隙不参与排序，CUB 保证不改动空隙元素），
+// 避免对 max_candidates 固定窗口做全量排序，也省去候选缓冲区的初始化。
 // ------------------------------------------------------------------
-__global__ void prepare_sort_kernel(
-    const Candidate *candidates,
-    int total,
-    float *keys_out,
-    Candidate *values_out)
+__global__ void compute_segment_offsets_kernel(
+    const int *counts,
+    int total_images,
+    int max_candidates,
+    int *begin_offsets,
+    int *end_offsets)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= total)
+    if (idx >= total_images)
         return;
 
-    keys_out[idx]   = candidates[idx].score;
-    values_out[idx] = candidates[idx];
+    int begin = idx * max_candidates;
+    begin_offsets[idx] = begin;
+    end_offsets[idx]   = begin + min(counts[idx], max_candidates);
 }
 
 // ------------------------------------------------------------------
@@ -289,14 +273,15 @@ size_t get_segmented_sort_temp_storage_bytes(
     float *d_keys_out = nullptr;
     Candidate *d_candidates_in = nullptr;
     Candidate *d_candidates_out = nullptr;
-    int *d_offsets = nullptr;
+    int *d_begin_offsets = nullptr;
+    int *d_end_offsets = nullptr;
 
     cub::DeviceSegmentedRadixSort::SortPairsDescending(
         nullptr, bytes,
         d_keys_in, d_keys_out,
         d_candidates_in, d_candidates_out,
         total_candidates, num_segments,
-        d_offsets, d_offsets + 1,
+        d_begin_offsets, d_end_offsets,
         0, sizeof(float) * 8);
 
     return bytes;
@@ -318,7 +303,6 @@ void yolo11_obb_postprocess_gpu(
     int max_detections,
     int max_candidates,
     int *d_counts,
-    Candidate *d_candidates,
     int *d_num_dets,
     float *d_boxes,
     float *d_scores,
@@ -327,28 +311,28 @@ void yolo11_obb_postprocess_gpu(
     float *d_sort_keys_out,
     Candidate *d_sort_candidates_in,
     Candidate *d_sort_candidates_out,
-    int *d_sort_offsets,
+    int *d_sort_begin_offsets,
+    int *d_sort_end_offsets,
     void *d_cub_temp,
     size_t cub_temp_storage_bytes,
     cudaStream_t stream)
 {
-    const int total_work = total_images * num_anchors;
-    int block_size       = 256;
-    int grid_size        = (total_work + block_size - 1) / block_size;
-    grid_size            = min(grid_size, 65536);
+    int block_size = 256;
 
-    // 1. 初始化候选框缓冲区
-    int init_total = total_images * max_candidates;
-    int init_grid  = (init_total + block_size - 1) / block_size;
-    init_grid      = min(init_grid, 65536);
-    init_candidates_kernel<<<init_grid, block_size, 0, stream>>>(
-        d_candidates, total_images, max_candidates);
-    checkRuntime(cudaPeekAtLastError());
-
-    // 2. 清零计数
+    // 1. 清零计数和输出缓冲区
     cudaMemsetAsync(d_counts, 0, sizeof(int) * total_images, stream);
 
-    // 3. 解码与过滤
+    int out_total = total_images * max_detections;
+    int out_grid  = (out_total + block_size - 1) / block_size;
+    out_grid      = min(out_grid, 65536);
+    init_output_kernel<<<out_grid, block_size, 0, stream>>>(
+        total_images, max_detections, d_num_dets, d_boxes, d_scores, d_classes);
+    checkRuntime(cudaPeekAtLastError());
+
+    // 2. 解码与过滤，候选直接写入 CUB 排序输入缓冲区
+    const int total_work = total_images * num_anchors;
+    int grid_size        = (total_work + block_size - 1) / block_size;
+    grid_size            = min(grid_size, 65536);
     decode_filter_kernel<<<grid_size, block_size, 0, stream>>>(
         input,
         input_is_half,
@@ -360,47 +344,33 @@ void yolo11_obb_postprocess_gpu(
         conf_thresh,
         max_candidates,
         d_counts,
-        d_candidates);
+        d_sort_keys_in,
+        d_sort_candidates_in);
     checkRuntime(cudaPeekAtLastError());
 
-    // 4. 使用 CUB DeviceSegmentedRadixSort 在 GPU 上对所有 batch 并行排序
-    int sort_total = total_images * max_candidates;
-    int grid_sort  = (sort_total + block_size - 1) / block_size;
-    prepare_sort_kernel<<<grid_sort, block_size, 0, stream>>>(
-        d_candidates, sort_total,
-        d_sort_keys_in, d_sort_candidates_in);
+    // 3. 按实际候选数计算分段偏移，CUB 只排有效候选（段间空隙不参与排序）
+    int seg_grid = (total_images + block_size - 1) / block_size;
+    compute_segment_offsets_kernel<<<seg_grid, block_size, 0, stream>>>(
+        d_counts, total_images, max_candidates,
+        d_sort_begin_offsets, d_sort_end_offsets);
     checkRuntime(cudaPeekAtLastError());
 
     checkRuntime(cub::DeviceSegmentedRadixSort::SortPairsDescending(
         d_cub_temp, cub_temp_storage_bytes,
         d_sort_keys_in, d_sort_keys_out,
         d_sort_candidates_in, d_sort_candidates_out,
-        sort_total,
+        total_images * max_candidates,
         total_images,
-        d_sort_offsets, d_sort_offsets + 1,
+        d_sort_begin_offsets, d_sort_end_offsets,
         0, sizeof(float) * 8,
         stream));
 
-    // 将排序后的候选框复制回 d_candidates，供 NMS 使用
-    checkRuntime(cudaMemcpyAsync(
-        d_candidates, d_sort_candidates_out,
-        sort_total * sizeof(Candidate),
-        cudaMemcpyDeviceToDevice, stream));
-
-    // 5. 清零输出缓冲区
-    int out_total = total_images * max_detections;
-    int out_grid  = (out_total + block_size - 1) / block_size;
-    out_grid      = min(out_grid, 65536);
-    init_output_kernel<<<out_grid, block_size, 0, stream>>>(
-        total_images, max_detections, d_num_dets, d_boxes, d_scores, d_classes);
-    checkRuntime(cudaPeekAtLastError());
-
-    // 6. NMS
+    // 4. NMS 直接读取排序输出（每图一个线程，候选框已按 score 降序）
     int nms_grid = (total_images + block_size - 1) / block_size;
     nms_grid     = min(nms_grid, 65536);
     nms_kernel<<<nms_grid, block_size, 0, stream>>>(
         total_images,
-        d_candidates,
+        d_sort_candidates_out,
         d_counts,
         max_candidates,
         iou_thresh,

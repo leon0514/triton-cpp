@@ -84,14 +84,14 @@ class Yolov5Postprocess
     Yolov5PostprocessConfig config_;
 
     tensor::Memory<int> counts_memory_;
-    tensor::Memory<yolov5_postprocess::Candidate> candidates_memory_;
 
     tensor::Memory<int> num_detections_workspace_;
     tensor::Memory<float> boxes_workspace_;
     tensor::Memory<float> scores_workspace_;
     tensor::Memory<int> classes_workspace_;
 
-    // CUB DeviceSegmentedRadixSort 工作区（避免 thrust + 主机同步）
+    // CUB DeviceSegmentedRadixSort 工作区（decode kernel 直接写 keys/values 输入，
+    // NMS 直接读 values 输出；偏移为 begin/end 两个数组，每次执行时按实际候选数填写）
     tensor::Memory<float> sort_keys_in_workspace_;
     tensor::Memory<float> sort_keys_out_workspace_;
     tensor::Memory<Candidate> sort_candidates_in_workspace_;

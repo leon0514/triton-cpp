@@ -20,7 +20,6 @@ Yolo11PosePostprocess::Yolo11PosePostprocess(const Yolo11PosePostprocessConfig &
                              config_.num_keypoints * config_.keypoint_dim;
 
     counts_memory_.gpu(max_batch);
-    candidates_memory_.gpu(total_candidates);
     keypoints_memory_.gpu(max_batch * config_.max_candidates *
                           config_.num_keypoints * config_.keypoint_dim);
 
@@ -36,16 +35,8 @@ Yolo11PosePostprocess::Yolo11PosePostprocess(const Yolo11PosePostprocessConfig &
     sort_keys_out_workspace_.gpu(total_candidates);
     sort_candidates_in_workspace_.gpu(total_candidates);
     sort_candidates_out_workspace_.gpu(total_candidates);
-    sort_offsets_workspace_.gpu(max_batch + 1);
-
-    // 预填分段偏移：每段长度为 max_candidates
-    std::vector<int> h_offsets(max_batch + 1);
-    for (int i = 0; i <= max_batch; ++i)
-    {
-        h_offsets[i] = i * max_candidates;
-    }
-    cudaMemcpy(sort_offsets_workspace_.gpu(), h_offsets.data(),
-               (max_batch + 1) * sizeof(int), cudaMemcpyHostToDevice);
+    // begin/end 两个偏移数组，具体值每次执行时由 compute_segment_offsets_kernel 填写
+    sort_offsets_workspace_.gpu(2 * max_batch);
 
     // 查询 CUB 临时存储大小（函数实现在 .cu 中，避免在 .cpp 中 include cub）
     cub_sort_temp_storage_bytes_ = get_segmented_sort_temp_storage_bytes(
@@ -76,7 +67,6 @@ void Yolo11PosePostprocess::forward(
         return;
 
     int *d_counts = counts_memory_.gpu(total_images);
-    Candidate *d_candidates = candidates_memory_.gpu(total_images * config_.max_candidates);
     float *d_keypoints = keypoints_memory_.gpu(
         total_images * config_.max_candidates *
         config_.num_keypoints * config_.keypoint_dim);
@@ -93,7 +83,8 @@ void Yolo11PosePostprocess::forward(
     float *d_sort_keys_out = sort_keys_out_workspace_.gpu(total_images * config_.max_candidates);
     Candidate *d_sort_candidates_in = sort_candidates_in_workspace_.gpu(total_images * config_.max_candidates);
     Candidate *d_sort_candidates_out = sort_candidates_out_workspace_.gpu(total_images * config_.max_candidates);
-    int *d_sort_offsets = sort_offsets_workspace_.gpu(total_images + 1);
+    int *d_sort_begin_offsets = sort_offsets_workspace_.gpu(2 * total_images);
+    int *d_sort_end_offsets   = d_sort_begin_offsets + total_images;
     uint8_t *d_cub_temp = cub_sort_temp_storage_bytes_ > 0
                               ? cub_sort_temp_storage_workspace_.gpu()
                               : nullptr;
@@ -114,7 +105,6 @@ void Yolo11PosePostprocess::forward(
         config_.max_detections,
         config_.max_candidates,
         d_counts,
-        d_candidates,
         d_keypoints,
         d_num_dets,
         d_boxes,
@@ -125,7 +115,8 @@ void Yolo11PosePostprocess::forward(
         d_sort_keys_out,
         d_sort_candidates_in,
         d_sort_candidates_out,
-        d_sort_offsets,
+        d_sort_begin_offsets,
+        d_sort_end_offsets,
         d_cub_temp,
         cub_sort_temp_storage_bytes_,
         stream);
