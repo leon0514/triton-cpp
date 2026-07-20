@@ -244,6 +244,30 @@ target_compile_options(triton_yolo26_postprocess PRIVATE
 )
 target_link_libraries(triton_yolo26_postprocess CUDA::cudart Threads::Threads)
 
+# -------------------- YOLO26 pose postprocess backend --------------------
+set(YOLO26_POSE_POSTPROCESS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo26_pose_postprocess/yolo26_pose_postprocess_kernel.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo26_pose_postprocess/yolo26_pose_postprocess_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo26_pose_postprocess/triton_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/yolo26_pose_postprocess/triton_backend.cpp
+)
+
+add_library(triton_yolo26_pose_postprocess SHARED ${YOLO26_POSE_POSTPROCESS_SOURCES} ${COMMON_SOURCES})
+set_target_properties(triton_yolo26_pose_postprocess PROPERTIES
+    OUTPUT_NAME "triton_yolo26_pose_postprocess"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    POSITION_INDEPENDENT_CODE ON
+)
+if(CMAKE_CUDA_ARCHITECTURES)
+    set_property(TARGET triton_yolo26_pose_postprocess PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
+endif()
+target_compile_options(triton_yolo26_pose_postprocess PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+)
+target_link_libraries(triton_yolo26_pose_postprocess CUDA::cudart Threads::Threads)
+
 # -------------------- RF-DETR postprocess backend --------------------
 set(RFDETR_POSTPROCESS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rfdetr_postprocess/rfdetr_postprocess_kernel.cu
@@ -337,6 +361,7 @@ if(TRITON_DIR)
         target_link_libraries(triton_yolo11_seg_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_yolov5_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_yolo26_postprocess ${TRITON_BACKEND_API_LIB})
+        target_link_libraries(triton_yolo26_pose_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_rfdetr_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_rfdetr_seg_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_classifier_postprocess ${TRITON_BACKEND_API_LIB})
@@ -349,12 +374,13 @@ if(TRITON_DIR)
         target_link_libraries(triton_yolo11_seg_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_yolov5_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_yolo26_postprocess ${TRITON_SERVER_API_LIB})
+        target_link_libraries(triton_yolo26_pose_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_rfdetr_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_rfdetr_seg_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_classifier_postprocess ${TRITON_SERVER_API_LIB})
     endif()
 endif()
 
-install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolo11_seg_postprocess triton_yolov5_postprocess triton_yolo26_postprocess triton_rfdetr_postprocess triton_rfdetr_seg_postprocess triton_classifier_postprocess
+install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolo11_seg_postprocess triton_yolov5_postprocess triton_yolo26_postprocess triton_yolo26_pose_postprocess triton_rfdetr_postprocess triton_rfdetr_seg_postprocess triton_classifier_postprocess
     LIBRARY DESTINATION lib
 )

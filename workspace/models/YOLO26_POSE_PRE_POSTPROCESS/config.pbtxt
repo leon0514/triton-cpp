@@ -1,0 +1,72 @@
+name: "YOLO26_POSE_PRE_POSTPROCESS"
+backend: "yolo26_pose_postprocess"
+max_batch_size: 16
+
+# YOLO26-pose one-to-one (NMS-free) 头输出：
+#   [batch, 300, 6 + num_keypoints * keypoint_dim]
+# 默认 17 个关键点，每个关键点 (x, y, visibility) -> 6 + 17*3 = 57
+
+input [
+  {
+    name: "model_output"
+    data_type: TYPE_FP32
+    dims: [300, 57]
+  }
+]
+
+output [
+  {
+    name: "num_dets"
+    data_type: TYPE_INT32
+    dims: [1]
+  },
+  {
+    name: "detection_boxes"
+    data_type: TYPE_FP32
+    dims: [-1, 4]
+  },
+  {
+    name: "detection_scores"
+    data_type: TYPE_FP32
+    dims: [-1]
+  },
+  {
+    name: "detection_classes"
+    data_type: TYPE_INT32
+    dims: [-1]
+  },
+  {
+    name: "detection_keypoints"
+    data_type: TYPE_FP32
+    dims: [-1, 17, 3]
+  }
+]
+
+parameters: {
+  key: "num_keypoints"
+  value: { string_value: "17" }
+}
+parameters: {
+  key: "keypoint_dim"
+  value: { string_value: "3" }
+}
+parameters: {
+  key: "confidence_threshold"
+  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "max_detections"
+  value: { string_value: "300" }
+}
+parameters: {
+  key: "max_batch_size"
+  value: { string_value: "16" }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]

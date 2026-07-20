@@ -1,0 +1,26 @@
+name: "YOLO26_POSE_PRE"
+platform: "tensorrt_plan"
+max_batch_size: 16
+default_model_filename: "model.plan"
+
+input [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [3, 640, 640]
+  }
+]
+
+output [
+  {
+    name: "output0"
+    data_type: TYPE_FP32
+    # YOLO26-pose one-to-one (NMS-free) head: [300, 57]
+    # 57 列: [x1, y1, x2, y2, score, class] + 17 个关键点 × 3 维 (x, y, visibility)
+    dims: [300, 57]
+  }
+]
+
+instance_group [
+  { count: 1, kind: KIND_GPU, gpus: [0] }
+]
