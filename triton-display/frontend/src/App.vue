@@ -93,8 +93,18 @@
 
             <section class="panel">
               <h3>标签过滤</h3>
+              <input
+                v-model="labelSearch"
+                type="text"
+                placeholder="搜索标签..."
+                class="label-search"
+              />
+              <div class="label-actions">
+                <button @click="selectAllLabels">全选</button>
+                <button @click="deselectAllLabels">清空</button>
+              </div>
               <div class="label-list">
-                <label v-for="label in availableLabels" :key="label.id">
+                <label v-for="label in filteredLabels" :key="label.id">
                   <input
                     type="checkbox"
                     :value="label.id"
@@ -185,6 +195,8 @@ const showScores = ref(true)
 const showPose = ref(true)
 const showSeg = ref(true)
 
+const labelSearch = ref('')
+
 const resultsCache = ref({})
 const classNamesCache = ref({})
 const selectedLabelsCache = ref({})
@@ -266,14 +278,32 @@ const availableLabels = computed(() => {
     }))
 })
 
+const filteredLabels = computed(() => {
+  const kw = labelSearch.value.trim().toLowerCase()
+  if (!kw) return availableLabels.value
+  return availableLabels.value.filter((l) =>
+    l.name.toLowerCase().includes(kw)
+  )
+})
+
+function selectAllLabels() {
+  const current = new Set(selectedLabels.value)
+  filteredLabels.value.forEach((l) => current.add(l.id))
+  selectedLabels.value = Array.from(current)
+}
+
+function deselectAllLabels() {
+  const toRemove = new Set(filteredLabels.value.map((l) => l.id))
+  selectedLabels.value = selectedLabels.value.filter((id) => !toRemove.has(id))
+}
+
 const filteredDetections = computed(() => {
   if (!result.value?.detections) return []
   return result.value.detections.filter((d) => {
     if (d.score < confThreshold.value) return false
     const name = getLabelName(d.class_id)
     if (!name || name.trim() === '') return false
-    if (selectedLabels.value.length > 0 && !selectedLabels.value.includes(d.class_id))
-      return false
+    if (!selectedLabels.value.includes(d.class_id)) return false
     return true
   })
 })
@@ -679,6 +709,39 @@ body {
 
 .label-list label:hover {
   background: #f0f1f4;
+}
+
+.label-search {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.label-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.label-actions button {
+  flex: 1;
+  padding: 6px 0;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+  color: #5f6368;
+  transition: all 0.15s;
+}
+
+.label-actions button:hover {
+  border-color: #1a237e;
+  color: #1a237e;
+  background: #f3f4f9;
 }
 
 .color-dot {

@@ -24,6 +24,20 @@
           <span class="icon">↻</span>
           {{ loading ? '刷新中...' : '刷新' }}
         </button>
+        <button
+          class="bulk-btn load-all"
+          :disabled="loading || !filteredModels.some((m) => !m.ready)"
+          @click="loadAllFiltered"
+        >
+          加载全部
+        </button>
+        <button
+          class="bulk-btn unload-all"
+          :disabled="loading || !filteredModels.some((m) => m.ready)"
+          @click="unloadAllFiltered"
+        >
+          卸载全部
+        </button>
       </div>
     </div>
 
@@ -225,6 +239,40 @@ async function onUnload(name) {
   }
 }
 
+async function loadAllFiltered() {
+  const targets = filteredModels.value.filter((m) => !m.ready).map((m) => m.name)
+  if (targets.length === 0) return
+  targets.forEach((name) => busyModels.value.add(name))
+  loading.value = true
+  error.value = ''
+  try {
+    await Promise.all(targets.map((name) => loadModel(name).catch(() => name)))
+    await loadModels()
+  } catch (e) {
+    error.value = `批量加载失败: ${e.message}`
+  } finally {
+    targets.forEach((name) => busyModels.value.delete(name))
+    loading.value = false
+  }
+}
+
+async function unloadAllFiltered() {
+  const targets = filteredModels.value.filter((m) => m.ready).map((m) => m.name)
+  if (targets.length === 0) return
+  targets.forEach((name) => busyModels.value.add(name))
+  loading.value = true
+  error.value = ''
+  try {
+    await Promise.all(targets.map((name) => unloadModel(name).catch(() => name)))
+    await loadModels()
+  } catch (e) {
+    error.value = `批量卸载失败: ${e.message}`
+  } finally {
+    targets.forEach((name) => busyModels.value.delete(name))
+    loading.value = false
+  }
+}
+
 async function onShowConfig(name) {
   selectedModel.value = { name, config: null, loading: true }
   try {
@@ -313,6 +361,37 @@ onMounted(loadModels)
 .refresh-btn:disabled {
   background: #9fa8da;
   cursor: not-allowed;
+}
+
+.bulk-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s, opacity 0.2s;
+}
+
+.bulk-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bulk-btn.load-all {
+  background: #28a745;
+}
+
+.bulk-btn.load-all:hover:not(:disabled) {
+  background: #218838;
+}
+
+.bulk-btn.unload-all {
+  background: #dc3545;
+}
+
+.bulk-btn.unload-all:hover:not(:disabled) {
+  background: #c82333;
 }
 
 .sort-select,
