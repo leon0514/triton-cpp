@@ -346,12 +346,40 @@ async function runInference() {
 }
 
 async function copyResult() {
-  try {
-    await navigator.clipboard.writeText(resultJson.value)
-    alert('已复制到剪贴板')
-  } catch (e) {
-    alert('复制失败')
+  const text = resultJson.value
+  if (!text) {
+    alert('没有可复制的结果')
+    return
   }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text)
+      alert('已复制到剪贴板')
+    } else {
+      fallbackCopy(text)
+    }
+  } catch (e) {
+    fallbackCopy(text)
+  }
+}
+
+function fallbackCopy(text) {
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch (e) {
+    ok = false
+  }
+  document.body.removeChild(textarea)
+  alert(ok ? '已复制到剪贴板' : '复制失败')
 }
 
 onMounted(loadModels)
