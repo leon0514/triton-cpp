@@ -1,0 +1,26 @@
+name: "YOLO26_OBB_PRE"
+platform: "tensorrt_plan"
+max_batch_size: 16
+default_model_filename: "model.plan"
+
+input [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [3, 640, 640]
+  }
+]
+
+output [
+  {
+    name: "output0"
+    data_type: TYPE_FP32
+    # YOLO26-OBB one-to-one (NMS-free) head: [300, 7]
+    # 7 列: [cx, cy, w, h, score, class, angle]
+    dims: [300, 7]
+  }
+]
+
+instance_group [
+  { count: 1, kind: KIND_GPU, gpus: [0] }
+]

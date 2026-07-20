@@ -1,0 +1,59 @@
+name: "YOLO26_OBB_PRE_POSTPROCESS"
+backend: "yolo26_obb_postprocess"
+max_batch_size: 16
+
+# YOLO26-OBB one-to-one (NMS-free) 头输出：
+#   [batch, 300, 7]
+# 7 列: [cx, cy, w, h, score, class, angle]
+
+input [
+  {
+    name: "model_output"
+    data_type: TYPE_FP32
+    dims: [300, 7]
+  }
+]
+
+output [
+  {
+    name: "num_dets"
+    data_type: TYPE_INT32
+    dims: [1]
+  },
+  {
+    name: "detection_boxes"
+    data_type: TYPE_FP32
+    dims: [-1, 5]
+  },
+  {
+    name: "detection_scores"
+    data_type: TYPE_FP32
+    dims: [-1]
+  },
+  {
+    name: "detection_classes"
+    data_type: TYPE_INT32
+    dims: [-1]
+  }
+]
+
+parameters: {
+  key: "confidence_threshold"
+  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "max_detections"
+  value: { string_value: "300" }
+}
+parameters: {
+  key: "max_batch_size"
+  value: { string_value: "16" }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]
