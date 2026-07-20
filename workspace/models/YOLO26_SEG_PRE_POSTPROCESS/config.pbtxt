@@ -1,0 +1,113 @@
+name: "YOLO26_SEG_PRE_POSTPROCESS"
+backend: "yolo26_seg_postprocess"
+max_batch_size: 16
+
+# YOLO26 one-to-one (NMS-free) seg head 输出：
+#   output0: [batch, 300, 38] -> [x1, y1, x2, y2, score, class, mask1..mask32]
+#   output1: [batch, 32, 160, 160] 分割原型
+
+input [
+  {
+    name: "model_output"
+    data_type: TYPE_FP32
+    dims: [300, 38]
+  }
+]
+input [
+  {
+    name: "mask_protos"
+    data_type: TYPE_FP32
+    dims: [32, 160, 160]
+  }
+]
+
+output [
+  {
+    name: "num_dets"
+    data_type: TYPE_INT32
+    dims: [1]
+  }
+]
+output [
+  {
+    name: "detection_boxes"
+    data_type: TYPE_FP32
+    dims: [-1, 4]
+  }
+]
+output [
+  {
+    name: "detection_scores"
+    data_type: TYPE_FP32
+    dims: [-1]
+  }
+]
+output [
+  {
+    name: "detection_classes"
+    data_type: TYPE_INT32
+    dims: [-1]
+  }
+]
+output [
+  {
+    name: "detection_masks"
+    data_type: TYPE_FP32
+    dims: [-1]
+  }
+]
+output [
+  {
+    name: "mask_offsets"
+    data_type: TYPE_INT32
+    dims: [-1]
+  }
+]
+output [
+  {
+    name: "mask_shapes"
+    data_type: TYPE_INT32
+    dims: [-1, 2]
+  }
+]
+
+parameters: {
+  key: "num_masks"
+  value: { string_value: "32" }
+}
+parameters: {
+  key: "proto_height"
+  value: { string_value: "160" }
+}
+parameters: {
+  key: "proto_width"
+  value: { string_value: "160" }
+}
+parameters: {
+  key: "input_width"
+  value: { string_value: "640" }
+}
+parameters: {
+  key: "input_height"
+  value: { string_value: "640" }
+}
+parameters: {
+  key: "confidence_threshold"
+  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "max_detections"
+  value: { string_value: "300" }
+}
+parameters: {
+  key: "max_batch_size"
+  value: { string_value: "16" }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]

@@ -76,6 +76,9 @@ cp build/libtriton_yolo11_pose_postprocess.so workspace/models/YOLO11_POSE_PRE_P
 cp build/libtriton_yolo11_seg_postprocess.so workspace/models/YOLO11_SEG_PRE_POSTPROCESS/1/
 cp build/libtriton_yolov5_postprocess.so workspace/models/YOLOV5_DET_PRE_POSTPROCESS/1/
 cp build/libtriton_yolo26_postprocess.so workspace/models/YOLO26_DET_PRE_POSTPROCESS/1/
+cp build/libtriton_yolo26_pose_postprocess.so workspace/models/YOLO26_POSE_PRE_POSTPROCESS/1/
+cp build/libtriton_yolo26_obb_postprocess.so workspace/models/YOLO26_OBB_PRE_POSTPROCESS/1/
+cp build/libtriton_yolo26_seg_postprocess.so workspace/models/YOLO26_SEG_PRE_POSTPROCESS/1/
 cp build/libtriton_rfdetr_postprocess.so workspace/models/RFDETR_DET_PRE_POSTPROCESS/1/
 cp build/libtriton_rfdetr_seg_postprocess.so workspace/models/RFDETR_SEG_PRE_POSTPROCESS/1/
 ```
@@ -485,7 +488,9 @@ parameters: {
 >     --onnx=/models/model.onnx \
 >     --saveEngine=/models/model.plan \
 >     --fp16 \
->     --skipInference
+>     --minShapes=images:1x3x640x640 \
+>     --optShapes=images:1x3x640x640 \
+>     --maxShapes=images:16x3x640x640
 > ```
 >
 > 具体 `--minShapes/--optShapes/--maxShapes` 等参数见下面各模型小节。

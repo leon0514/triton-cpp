@@ -1,0 +1,35 @@
+name: "YOLO26_SEG_PRE"
+platform: "tensorrt_plan"
+max_batch_size: 16
+default_model_filename: "model.plan"
+
+input [
+  {
+    name: "images"
+    data_type: TYPE_FP32
+    dims: [3, 640, 640]
+  }
+]
+
+output [
+  {
+    name: "output0"
+    data_type: TYPE_FP32
+    # YOLO26 one-to-one (NMS-free) seg head: [300, 38]
+    # 38 列: [x1, y1, x2, y2, score, class, mask1, ..., mask32]
+    dims: [300, 38]
+  }
+]
+
+output [
+  {
+    name: "output1"
+    data_type: TYPE_FP32
+    # segmentation prototypes: [32, 160, 160]
+    dims: [32, 160, 160]
+  }
+]
+
+instance_group [
+  { count: 1, kind: KIND_GPU, gpus: [0] }
+]
