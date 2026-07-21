@@ -364,6 +364,7 @@ struct RequestInfo
     int image_offset = 0;
 
     bool input_on_device = false;
+    int64_t input_mem_type_id = 0;
 
     // 输入 buffer（host 或 device）
     const uint8_t *input_base = nullptr;
@@ -584,6 +585,7 @@ ExtractImageFromRequest(
     info.total_input_bytes = total_bytes;
     info.input_base        = static_cast<const uint8_t *>(buffer);
     info.input_on_device   = (mem_type == TRITONSERVER_MEMORY_GPU);
+    info.input_mem_type_id = mem_type_id;
 
     return nullptr;
 }
@@ -858,8 +860,9 @@ TRITONBACKEND_ModelInstanceExecute(
     }
 
     // 6. 逐个 request 处理：
-    //    - device 输入直接复用（零拷贝）。
-    //    - host 输入统一拷贝到共享的 device staging buffer 的不同 offset。
+    //    - 输入已在当前 GPU 上时直接复用（零拷贝）。
+    //    - host 输入或位于其他 GPU 的输入，统一拷贝到共享的 device staging buffer
+    //      的不同 offset，避免跨卡访问。
     //    - 输出先写入共享的 device workspace，再异步拷贝到 response buffer，
     //      这样同时支持 Triton 分配的 GPU/CPU 输出 buffer（HTTP 响应通常为 CPU）。
     uint64_t input_offset  = 0;
@@ -872,11 +875,16 @@ TRITONBACKEND_ModelInstanceExecute(
         std::vector<preprocess::ImageDesc> req_images;
         req_images.reserve(info.batch_size);
 
-        if (!info.input_on_device)
+        const bool need_device_copy = !info.input_on_device ||
+            (info.input_on_device && info.input_mem_type_id != device_id);
+
+        if (need_device_copy)
         {
             uint8_t *dst = input_base_ptr + input_offset;
-            cudaError_t cuerr = cudaMemcpyAsync(
-                dst, info.input_base, info.total_input_bytes, cudaMemcpyHostToDevice, stream);
+            cudaError_t cuerr = CopyBufferToDevice(
+                dst, info.input_base, info.total_input_bytes,
+                info.input_on_device, static_cast<int>(info.input_mem_type_id),
+                device_id, stream);
             if (cuerr != cudaSuccess)
             {
                 guard.SetError(TRITONSERVER_ErrorNew(

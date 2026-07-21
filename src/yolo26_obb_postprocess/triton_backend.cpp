@@ -246,6 +246,7 @@ struct RequestInfo
 
     TRITONSERVER_DataType input_datatype = TRITONSERVER_TYPE_FP32;
     bool input_on_device = false;
+    int64_t input_mem_type_id = 0;
     const void *input_base = nullptr;
 
     void *num_dets_buffer = nullptr;
@@ -438,6 +439,7 @@ ExtractModelOutputFromRequest(
     info.total_input_bytes = input_byte_size;
     info.input_base        = buffer;
     info.input_on_device   = (mem_type == TRITONSERVER_MEMORY_GPU);
+    info.input_mem_type_id = mem_type_id;
     info.input_datatype    = input_datatype;
 
     return nullptr;
@@ -611,7 +613,7 @@ TRITONBACKEND_ModelInstanceExecute(
     const void *d_input = nullptr;
     bool input_is_half = false;
 
-    if (request_num == 1 && infos[0].input_on_device)
+    if (request_num == 1 && infos[0].input_on_device && infos[0].input_mem_type_id == device_id)
     {
         d_input       = infos[0].input_base;
         input_is_half = (infos[0].input_datatype == TRITONSERVER_TYPE_FP16);
@@ -630,11 +632,10 @@ TRITONBACKEND_ModelInstanceExecute(
         for (const auto &info : infos)
         {
             uint8_t *dst = input_base_ptr + input_offset;
-            cudaMemcpyKind kind = info.input_on_device
-                                      ? cudaMemcpyDeviceToDevice
-                                      : cudaMemcpyHostToDevice;
-            cudaError_t err = cudaMemcpyAsync(
-                dst, info.input_base, info.total_input_bytes, kind, stream);
+            cudaError_t err = CopyBufferToDevice(
+                dst, info.input_base, info.total_input_bytes,
+                info.input_on_device, static_cast<int>(info.input_mem_type_id),
+                device_id, stream);
             if (err != cudaSuccess)
             {
                 guard.SetError(TRITONSERVER_ErrorNew(

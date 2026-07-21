@@ -241,6 +241,7 @@ struct InputBufferInfo
     const void *base = nullptr;
     uint64_t byte_size = 0;
     bool on_device = false;
+    int64_t mem_type_id = 0;
     TRITONSERVER_DataType datatype = TRITONSERVER_TYPE_FP32;
     int batch_size = 1;
     int dim0 = 0;
@@ -434,10 +435,11 @@ ExtractInputByName(
     RETURN_IF_ERROR(TRITONBACKEND_InputBuffer(
         input, 0, &buffer, &input_byte_size, &mem_type, &mem_type_id));
 
-    info.base      = buffer;
-    info.byte_size = input_byte_size;
-    info.on_device = (mem_type == TRITONSERVER_MEMORY_GPU);
-    info.datatype  = input_datatype;
+    info.base        = buffer;
+    info.byte_size   = input_byte_size;
+    info.on_device   = (mem_type == TRITONSERVER_MEMORY_GPU);
+    info.mem_type_id = mem_type_id;
+    info.datatype    = input_datatype;
 
     return nullptr;
 }
@@ -776,11 +778,10 @@ TRITONBACKEND_ModelInstanceExecute(
     for (const auto &info : infos)
     {
         uint8_t *dst_dets = dets_base_ptr + dets_offset;
-        cudaMemcpyKind kind_dets = info.dets_info.on_device
-                                      ? cudaMemcpyDeviceToDevice
-                                      : cudaMemcpyHostToDevice;
-        cudaError_t err = cudaMemcpyAsync(
-            dst_dets, info.dets_info.base, info.dets_info.byte_size, kind_dets, stream);
+        cudaError_t err = CopyBufferToDevice(
+            dst_dets, info.dets_info.base, info.dets_info.byte_size,
+            info.dets_info.on_device, static_cast<int>(info.dets_info.mem_type_id),
+            device_id, stream);
         if (err != cudaSuccess)
         {
             guard.SetError(TRITONSERVER_ErrorNew(
@@ -790,11 +791,10 @@ TRITONBACKEND_ModelInstanceExecute(
         dets_offset += info.dets_info.byte_size;
 
         uint8_t *dst_labels = labels_base_ptr + labels_offset;
-        cudaMemcpyKind kind_labels = info.labels_info.on_device
-                                        ? cudaMemcpyDeviceToDevice
-                                        : cudaMemcpyHostToDevice;
-        err = cudaMemcpyAsync(
-            dst_labels, info.labels_info.base, info.labels_info.byte_size, kind_labels, stream);
+        err = CopyBufferToDevice(
+            dst_labels, info.labels_info.base, info.labels_info.byte_size,
+            info.labels_info.on_device, static_cast<int>(info.labels_info.mem_type_id),
+            device_id, stream);
         if (err != cudaSuccess)
         {
             guard.SetError(TRITONSERVER_ErrorNew(
@@ -804,11 +804,10 @@ TRITONBACKEND_ModelInstanceExecute(
         labels_offset += info.labels_info.byte_size;
 
         uint8_t *dst_masks = masks_base_ptr + masks_offset;
-        cudaMemcpyKind kind_masks = info.masks_info.on_device
-                                       ? cudaMemcpyDeviceToDevice
-                                       : cudaMemcpyHostToDevice;
-        err = cudaMemcpyAsync(
-            dst_masks, info.masks_info.base, info.masks_info.byte_size, kind_masks, stream);
+        err = CopyBufferToDevice(
+            dst_masks, info.masks_info.base, info.masks_info.byte_size,
+            info.masks_info.on_device, static_cast<int>(info.masks_info.mem_type_id),
+            device_id, stream);
         if (err != cudaSuccess)
         {
             guard.SetError(TRITONSERVER_ErrorNew(
