@@ -37,9 +37,9 @@ static_assert(sizeof(Candidate) == 32, "Candidate must stay 32-byte aligned");
  *   - output1: [batch, num_masks, proto_h, proto_w]
  *
  * 输出 mask 说明：
- *   对每个保留的检测框，按 prototype 分辨率计算 mask 并裁剪到检测框（proto 坐标系），
- *   按行优先展开并顺序拼接到 detection_masks 中。每个 mask 在 1D buffer 中的起始偏移
- *   写入 mask_offsets，裁剪后的形状写入 mask_shapes。
+ *   对每个保留的检测框，按 prototype 分辨率计算 mask，将裁剪区域内的 mask 最近邻
+ *   采样为固定 160x160 并顺序拼接到 detection_masks 中。每个 mask 在 1D buffer 中的
+ *   起始偏移写入 mask_offsets，固定形状 [160, 160] 写入 mask_shapes。
  */
 size_t get_segmented_sort_temp_storage_bytes(
     int total_candidates, int num_segments);
@@ -73,6 +73,36 @@ void yolo26_seg_postprocess_gpu(
     int *d_sort_offsets,
     void *d_cub_temp,
     size_t cub_temp_storage_bytes,
+    cudaStream_t stream);
+
+/**
+ * @brief 使用 cuBLAS GEMM 计算 mask，再裁剪并 resize 到 160x160。
+ *
+ * 在调用本函数前，必须先调用 yolo26_seg_postprocess_gpu 完成过滤 + top-K + 坐标写入。
+ */
+void yolo26_seg_compute_masks_gpu(
+    const void *input,
+    const void *mask_protos,
+    bool input_is_half,
+    int total_images,
+    int num_predictions,
+    int num_masks,
+    int proto_h,
+    int proto_w,
+    int input_width,
+    int input_height,
+    const int *d_num_dets,
+    const float *d_boxes,
+    const Candidate *d_candidates,
+    int max_detections,
+    float *d_detection_masks,
+    int *d_mask_offsets,
+    int *d_mask_shapes,
+    cublasHandle_t cublas_handle,
+    float *d_coefficients,
+    float *d_raw_masks,
+    float *d_proto_fp32,
+    int *h_num_dets,
     cudaStream_t stream);
 
 } // namespace yolo26_seg_postprocess

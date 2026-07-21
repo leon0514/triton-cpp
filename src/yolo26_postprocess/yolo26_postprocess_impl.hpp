@@ -44,7 +44,8 @@ class Yolo26Postprocess
         bool input_is_half,
         int total_images,
         int num_predictions,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const float *d2i = nullptr);
 
     inline const Yolo26PostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }

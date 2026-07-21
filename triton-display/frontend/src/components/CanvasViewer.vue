@@ -12,7 +12,6 @@ const props = defineProps({
   imageSrc: { type: String, default: '' },
   detections: { type: Array, default: () => [] },
   modelType: { type: String, default: 'det' },
-  transform: { type: Array, default: null },
   showBoxes: { type: Boolean, default: true },
   showLabels: { type: Boolean, default: true },
   showScores: { type: Boolean, default: true },
@@ -39,14 +38,6 @@ const palette = [
 
 function getColor(id) {
   return palette[id % palette.length]
-}
-
-function applyTransform(x, y, M) {
-  if (!M) return [x, y]
-  return [
-    M[0][0] * x + M[0][1] * y + M[0][2],
-    M[1][0] * x + M[1][1] * y + M[1][2],
-  ]
 }
 
 function loadImage(src) {
@@ -105,10 +96,8 @@ function drawDetection(det) {
 
 function drawSeg(det) {
   const [x1, y1, x2, y2] = det.box
-  const [x1p, y1p] = applyTransform(x1, y1, props.transform)
-  const [x2p, y2p] = applyTransform(x2, y2, props.transform)
-  const boxW = x2p - x1p
-  const boxH = y2p - y1p
+  const boxW = x2 - x1
+  const boxH = y2 - y1
   if (boxW <= 0 || boxH <= 0) return
 
   const mask = det.mask
@@ -143,22 +132,20 @@ function drawSeg(det) {
   ctx.save()
   ctx.globalCompositeOperation = 'source-over'
   ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(tmp, x1p, y1p, boxW, boxH)
+  ctx.drawImage(tmp, x1, y1, boxW, boxH)
   ctx.restore()
 }
 
 function drawAABB(det) {
   if (!props.showBoxes) return
   const [x1, y1, x2, y2] = det.box
-  const [x1p, y1p] = applyTransform(x1, y1, props.transform)
-  const [x2p, y2p] = applyTransform(x2, y2, props.transform)
 
   const color = getColor(det.class_id)
   ctx.strokeStyle = color
   ctx.lineWidth = 2
-  ctx.strokeRect(x1p, y1p, x2p - x1p, y2p - y1p)
+  ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
 
-  drawLabel(det, x1p, y1p, color)
+  drawLabel(det, x1, y1, color)
 }
 
 function drawOBB(det) {
@@ -179,7 +166,7 @@ function drawOBB(det) {
   const transformed = corners.map(([x, y]) => {
     const rx = cosA * x - sinA * y + cx
     const ry = sinA * x + cosA * y + cy
-    return applyTransform(rx, ry, props.transform)
+    return [rx, ry]
   })
 
   const color = getColor(det.class_id)
@@ -220,7 +207,7 @@ function drawLabel(det, x, y, color) {
 function drawPose(det) {
   const color = getColor(det.class_id)
   const keypoints = det.keypoints.map(([x, y, conf]) => ({
-    point: applyTransform(x, y, props.transform),
+    point: [x, y],
     conf,
   }))
 
@@ -254,7 +241,6 @@ watch(
     props.imageSrc,
     props.detections,
     props.modelType,
-    props.transform,
     props.showBoxes,
     props.showLabels,
     props.showScores,

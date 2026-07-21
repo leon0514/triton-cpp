@@ -6,10 +6,12 @@
 #ifndef __YOLO26_SEG_POSTPROCESS_IMPL_HPP__
 #define __YOLO26_SEG_POSTPROCESS_IMPL_HPP__
 
+#include "common/map_boxes.hpp"
 #include "common/memory.hpp"
 #include "yolo26_seg_postprocess/yolo26_seg_postprocess_kernel.hpp"
 
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 
 #include <memory>
 #include <vector>
@@ -34,7 +36,7 @@ class Yolo26SegPostprocess
 {
   public:
     explicit Yolo26SegPostprocess(const Yolo26SegPostprocessConfig &config);
-    ~Yolo26SegPostprocess() = default;
+    ~Yolo26SegPostprocess();
 
     Yolo26SegPostprocess(const Yolo26SegPostprocess &) = delete;
     Yolo26SegPostprocess &operator=(const Yolo26SegPostprocess &) = delete;
@@ -50,7 +52,8 @@ class Yolo26SegPostprocess
         bool input_is_half,
         int total_images,
         int num_predictions,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const float *d2i = nullptr);
 
     inline const Yolo26SegPostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }
@@ -72,6 +75,7 @@ class Yolo26SegPostprocess
     tensor::Memory<yolo26_seg_postprocess::Candidate> candidates_memory_;
 
     tensor::Memory<int> num_detections_workspace_;
+    tensor::Memory<int> h_num_dets_workspace_;
     tensor::Memory<float> boxes_workspace_;
     tensor::Memory<float> scores_workspace_;
     tensor::Memory<int> classes_workspace_;
@@ -79,6 +83,12 @@ class Yolo26SegPostprocess
     tensor::Memory<float> detection_masks_workspace_;
     tensor::Memory<int> mask_offsets_workspace_;
     tensor::Memory<int> mask_shapes_workspace_;
+
+    tensor::Memory<float> coefficients_workspace_;
+    tensor::Memory<float> raw_masks_workspace_;
+    tensor::Memory<float> proto_fp32_workspace_;
+
+    cublasHandle_t cublas_handle_ = nullptr;
 
     // CUB DeviceSegmentedRadixSort 工作区
     tensor::Memory<float> sort_keys_in_workspace_;

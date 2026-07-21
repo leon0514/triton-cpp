@@ -6,6 +6,7 @@
 #ifndef __YOLO11_POSTPROCESS_IMPL_HPP__
 #define __YOLO11_POSTPROCESS_IMPL_HPP__
 
+#include "common/map_boxes.hpp"
 #include "common/memory.hpp"
 #include "yolo11_postprocess/yolo11_postprocess_kernel.hpp"
 
@@ -63,7 +64,8 @@ class Yolo11Postprocess
         bool input_is_half,
         int total_images,
         int num_anchors,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const float *d2i = nullptr);
 
     inline const Yolo11PostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }

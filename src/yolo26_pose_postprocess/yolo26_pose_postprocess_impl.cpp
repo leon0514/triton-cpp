@@ -4,6 +4,7 @@
  */
 
 #include "yolo26_pose_postprocess/yolo26_pose_postprocess_impl.hpp"
+#include "common/map_boxes.hpp"
 #include "yolo26_pose_postprocess/triton_config.hpp"
 #include "common/check.hpp"
 #include <cstdio>
@@ -61,7 +62,8 @@ void Yolo26PosePostprocess::forward(
     bool input_is_half,
     int total_images,
     int num_predictions,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    const float *d2i)
 {
     if (total_images <= 0 || num_predictions <= 0)
         return;
@@ -144,6 +146,16 @@ void Yolo26PosePostprocess::forward(
         d_cub_temp,
         cub_sort_temp_storage_bytes_,
         stream);
+
+    // 将检测框和关键点从模型输入坐标系映射回原图坐标系
+    if (d2i != nullptr)
+    {
+        map_boxes_to_image(
+            d_boxes, d2i, total_images, config_.max_detections, stream);
+        map_keypoints_to_image(
+            d_output_keypoints, d2i, total_images, config_.max_detections,
+            config_.num_keypoints, config_.keypoint_dim, stream);
+    }
 }
 
 } // namespace yolo26_pose_postprocess

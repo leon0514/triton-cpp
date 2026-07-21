@@ -6,6 +6,7 @@
 #ifndef __YOLO26_OBB_POSTPROCESS_IMPL_HPP__
 #define __YOLO26_OBB_POSTPROCESS_IMPL_HPP__
 
+#include "common/map_boxes.hpp"
 #include "common/memory.hpp"
 #include "yolo26_obb_postprocess/yolo26_obb_postprocess_kernel.hpp"
 
@@ -38,13 +39,17 @@ class Yolo26ObbPostprocess
      * @brief 在指定 CUDA 流上执行 YOLO26-OBB 后处理。
      *
      * 输出缓冲区为实例初始化时预分配的 GPU workspace。
+     *
+     * @param stream           CUDA 流
+     * @param d2i              坐标变换矩阵（连续 [N, 6]），为 nullptr 时不做映射
      */
     void forward(
         const void *input,
         bool input_is_half,
         int total_images,
         int num_predictions,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const float *d2i = nullptr);
 
     inline const Yolo26ObbPostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }

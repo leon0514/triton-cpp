@@ -50,7 +50,8 @@ class RfDetrPostprocess
         bool input_is_half,
         int total_images,
         int num_queries,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const float *d2i = nullptr);
 
     inline const RfDetrPostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }

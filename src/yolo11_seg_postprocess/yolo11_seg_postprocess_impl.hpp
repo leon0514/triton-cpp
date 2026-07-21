@@ -6,10 +6,12 @@
 #ifndef __YOLO11_SEG_POSTPROCESS_IMPL_HPP__
 #define __YOLO11_SEG_POSTPROCESS_IMPL_HPP__
 
+#include "common/map_boxes.hpp"
 #include "common/memory.hpp"
 #include "yolo11_seg_postprocess/yolo11_seg_postprocess_kernel.hpp"
 
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 
 #include <memory>
 #include <vector>
@@ -45,7 +47,7 @@ class Yolo11SegPostprocess
 {
   public:
     explicit Yolo11SegPostprocess(const Yolo11SegPostprocessConfig &config);
-    ~Yolo11SegPostprocess() = default;
+    ~Yolo11SegPostprocess();
 
     Yolo11SegPostprocess(const Yolo11SegPostprocess &) = delete;
     Yolo11SegPostprocess &operator=(const Yolo11SegPostprocess &) = delete;
@@ -71,7 +73,8 @@ class Yolo11SegPostprocess
         bool input_is_half,
         int total_images,
         int num_anchors,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const float *d2i = nullptr);
 
     inline const Yolo11SegPostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }
@@ -98,6 +101,15 @@ class Yolo11SegPostprocess
     tensor::Memory<float> detection_masks_workspace_;
     tensor::Memory<int> mask_offsets_workspace_;
     tensor::Memory<int> mask_shapes_workspace_;
+
+    tensor::Memory<int> h_num_dets_workspace_;
+
+    tensor::Memory<float> coefficients_workspace_;
+    tensor::Memory<float> raw_masks_workspace_;
+    tensor::Memory<float> proto_fp32_workspace_;
+
+    // cuBLAS handle 与工作流绑定，复用避免每次创建开销
+    cublasHandle_t cublas_handle_ = nullptr;
 
     // NMS 后选区到候选框的映射，复用以避免每次 forward 都 cudaMallocAsync
     tensor::Memory<int> det_to_cand_idx_workspace_;

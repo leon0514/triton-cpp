@@ -16,6 +16,11 @@ input [
     name: "labels"
     data_type: TYPE_FP32
     dims: [300, 91]
+  },
+  {
+    name: "transform_metadata"
+    data_type: TYPE_FP32
+    dims: [6]
   }
 ]
 

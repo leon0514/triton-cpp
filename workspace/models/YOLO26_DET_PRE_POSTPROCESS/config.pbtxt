@@ -11,6 +11,11 @@ input [
     name: "model_output"
     data_type: TYPE_FP32
     dims: [300, 6]
+  },
+  {
+    name: "transform_metadata"
+    data_type: TYPE_FP32
+    dims: [6]
   }
 ]
 

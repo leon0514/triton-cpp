@@ -4,6 +4,7 @@
  */
 
 #include "yolo11_postprocess/yolo11_postprocess_impl.hpp"
+#include "common/map_boxes.hpp"
 #include <cstdio>
 
 namespace yolo11_postprocess
@@ -46,7 +47,8 @@ void Yolo11Postprocess::forward(
     bool input_is_half,
     int total_images,
     int num_anchors,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    const float *d2i)
 {
     if (total_images <= 0 || num_anchors <= 0)
         return;
@@ -97,6 +99,13 @@ void Yolo11Postprocess::forward(
         d_cub_temp,
         cub_sort_temp_storage_bytes_,
         stream);
+
+    // 将检测框从模型输入坐标系映射回原图坐标系
+    if (d2i != nullptr)
+    {
+        map_boxes_to_image(
+            d_boxes, d2i, total_images, config_.max_detections, stream);
+    }
 }
 
 } // namespace yolo11_postprocess

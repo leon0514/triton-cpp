@@ -4,11 +4,14 @@
  */
 
 #include "yolo26_seg_postprocess/yolo26_seg_postprocess_impl.hpp"
+#include "common/map_boxes.hpp"
 #include "common/check.hpp"
 #include <cstdio>
 
 namespace yolo26_seg_postprocess
 {
+
+constexpr int kMaskOutputSize = 160;
 
 Yolo26SegPostprocess::Yolo26SegPostprocess(const Yolo26SegPostprocessConfig &config)
     : config_(config)
@@ -21,15 +24,20 @@ Yolo26SegPostprocess::Yolo26SegPostprocess(const Yolo26SegPostprocessConfig &con
     candidates_memory_.gpu(total_candidates);
 
     num_detections_workspace_.gpu(max_batch);
+    h_num_dets_workspace_.cpu(max_batch);
     boxes_workspace_.gpu(max_batch * config_.max_detections * 4);
     scores_workspace_.gpu(max_batch * config_.max_detections);
     classes_workspace_.gpu(max_batch * config_.max_detections);
 
     size_t mask_pixels = static_cast<size_t>(max_batch) * config_.max_detections *
-                         config_.proto_height * config_.proto_width;
+                         kMaskOutputSize * kMaskOutputSize;
     detection_masks_workspace_.gpu(mask_pixels);
     mask_offsets_workspace_.gpu(max_batch * config_.max_detections);
     mask_shapes_workspace_.gpu(max_batch * config_.max_detections * 2);
+
+    coefficients_workspace_.gpu(max_batch * config_.max_detections * config_.num_masks);
+    raw_masks_workspace_.gpu(max_batch * config_.max_detections * config_.proto_height * config_.proto_width);
+    proto_fp32_workspace_.gpu(max_batch * config_.num_masks * config_.proto_height * config_.proto_width);
 
     sort_keys_in_workspace_.gpu(total_candidates);
     sort_keys_out_workspace_.gpu(total_candidates);
@@ -51,6 +59,22 @@ Yolo26SegPostprocess::Yolo26SegPostprocess(const Yolo26SegPostprocessConfig &con
     {
         cub_sort_temp_storage_workspace_.gpu(cub_sort_temp_storage_bytes_);
     }
+
+    cublasStatus_t status = cublasCreate(&cublas_handle_);
+    if (status != CUBLAS_STATUS_SUCCESS)
+    {
+        fprintf(stderr, "[Yolo26SegPostprocess] cublasCreate failed: %d\n", status);
+        abort();
+    }
+}
+
+Yolo26SegPostprocess::~Yolo26SegPostprocess()
+{
+    if (cublas_handle_ != nullptr)
+    {
+        cublasDestroy(cublas_handle_);
+        cublas_handle_ = nullptr;
+    }
 }
 
 void Yolo26SegPostprocess::forward(
@@ -59,7 +83,8 @@ void Yolo26SegPostprocess::forward(
     bool input_is_half,
     int total_images,
     int num_predictions,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    const float *d2i)
 {
     if (total_images <= 0 || num_predictions <= 0)
         return;
@@ -73,7 +98,7 @@ void Yolo26SegPostprocess::forward(
     int *d_classes  = classes_workspace_.gpu(total_images * config_.max_detections);
 
     size_t mask_pixels = static_cast<size_t>(total_images) * config_.max_detections *
-                         config_.proto_height * config_.proto_width;
+                         kMaskOutputSize * kMaskOutputSize;
     float *d_detection_masks = detection_masks_workspace_.gpu(mask_pixels);
     int *d_mask_offsets = mask_offsets_workspace_.gpu(total_images * config_.max_detections);
     int *d_mask_shapes = mask_shapes_workspace_.gpu(total_images * config_.max_detections * 2);
@@ -147,6 +172,45 @@ void Yolo26SegPostprocess::forward(
         d_cub_temp,
         cub_sort_temp_storage_bytes_,
         stream);
+
+    // 阶段 2：使用 cuBLAS GEMM 计算 mask 并裁剪到 160x160
+    cublasStatus_t cublas_status = cublasSetStream(cublas_handle_, stream);
+    if (cublas_status != CUBLAS_STATUS_SUCCESS)
+    {
+        fprintf(stderr, "[Yolo26SegPostprocess] cublasSetStream failed: %d\n", cublas_status);
+        abort();
+    }
+    yolo26_seg_compute_masks_gpu(
+        input,
+        mask_protos,
+        input_is_half,
+        total_images,
+        num_predictions,
+        config_.num_masks,
+        config_.proto_height,
+        config_.proto_width,
+        config_.input_width,
+        config_.input_height,
+        d_num_dets,
+        d_boxes,
+        d_cands,
+        config_.max_detections,
+        d_detection_masks,
+        d_mask_offsets,
+        d_mask_shapes,
+        cublas_handle_,
+        coefficients_workspace_.gpu(),
+        raw_masks_workspace_.gpu(),
+        proto_fp32_workspace_.gpu(),
+        h_num_dets_workspace_.cpu(),
+        stream);
+
+    // 将检测框从模型输入坐标系映射回原图坐标系
+    if (d2i != nullptr)
+    {
+        map_boxes_to_image(
+            d_boxes, d2i, total_images, config_.max_detections, stream);
+    }
 }
 
 } // namespace yolo26_seg_postprocess

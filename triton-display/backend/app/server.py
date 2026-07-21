@@ -191,7 +191,7 @@ async def infer(
 
         # Classification ensemble returns top-k classes and scores
         if "classifier" in model_name_lower:
-            output_names = ["classes", "scores", "transform_metadata"]
+            output_names = ["classes", "scores"]
             outputs = [httpclient.InferRequestedOutput(name) for name in output_names]
             response = client.infer(
                 model_name=model_name,
@@ -201,7 +201,6 @@ async def infer(
 
             classes_arr = response.as_numpy("classes")[0]  # [top_k]
             scores_arr = response.as_numpy("scores")[0]
-            transform = response.as_numpy("transform_metadata")[0].reshape(2, 3)
 
             return {
                 "model_type": "classifier",
@@ -209,7 +208,6 @@ async def infer(
                 "classes": classes_arr.tolist(),
                 "scores": scores_arr.tolist(),
                 "top_k": int(classes_arr.shape[0]),
-                "transform": transform.tolist(),
                 "detections": [],
             }
 
@@ -218,7 +216,6 @@ async def infer(
             "detection_boxes",
             "detection_scores",
             "detection_classes",
-            "transform_metadata",
         ]
 
         # Pose models also have keypoints
@@ -245,13 +242,11 @@ async def infer(
         boxes = response.as_numpy("detection_boxes")[0]  # [max_dets, ...]
         scores = response.as_numpy("detection_scores")[0]
         classes = response.as_numpy("detection_classes")[0]
-        transform = response.as_numpy("transform_metadata")[0].reshape(2, 3)
 
         result = {
             "model_type": "detection",
             "image_shape": list(img.shape),
             "num_dets": int(num_dets),
-            "transform": transform.tolist(),
             "detections": [],
         }
 

@@ -34,10 +34,10 @@ struct Candidate
  *   - masks:  [batch, num_queries, mask_h, mask_w]  mask logits
  *
  * 输出 mask 说明：
- *   对每个保留的检测框，按模型 mask 分辨率裁剪出对应 query 的 mask，按行优先展开并
- *   顺序拼接到 detection_masks 中。每个 mask 在 1D buffer 中的起始偏移写入
- *   detection_mask_offsets，裁剪后的形状写入 detection_mask_shapes。
- *   1D buffer 的总容量为 max_detections * mask_h * mask_w。
+ *   对每个保留的检测框，从对应 query 的模型 mask 中裁剪框内区域，并最近邻采样为固定
+ *   160x160，按行优先展开并顺序拼接到 detection_masks 中。每个 mask 在 1D buffer 中的
+ *   起始偏移写入 detection_mask_offsets，固定形状 [160, 160] 写入 detection_mask_shapes。
+ *   1D buffer 的总容量为 max_detections * 160 * 160。
  */
 size_t get_segmented_sort_temp_storage_bytes(
     int total_candidates, int num_segments);

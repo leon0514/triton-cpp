@@ -4,6 +4,7 @@
  */
 
 #include "rfdetr_seg_postprocess/rfdetr_seg_postprocess_impl.hpp"
+#include "common/map_boxes.hpp"
 #include "common/check.hpp"
 
 #include <algorithm>
@@ -12,6 +13,8 @@
 
 namespace rfdetr_seg_postprocess
 {
+
+constexpr int kMaskOutputSize = 160;
 
 RfDetrSegPostprocess::RfDetrSegPostprocess(const RfDetrSegPostprocessConfig &config)
     : config_(config)
@@ -45,8 +48,8 @@ RfDetrSegPostprocess::RfDetrSegPostprocess(const RfDetrSegPostprocessConfig &con
     classes_workspace_.gpu(max_batch * max_detections);
     det_to_query_idx_workspace_.gpu(max_batch * max_detections);
 
-    // mask workspace 仅预分配一份固定槽位：每检测一个 slot = mask_h * mask_w
-    detection_masks_workspace_.gpu(max_batch * max_detections * 96 * 96);
+    // mask workspace 仅预分配一份固定槽位：每检测一个 slot = 160 * 160
+    detection_masks_workspace_.gpu(max_batch * max_detections * kMaskOutputSize * kMaskOutputSize);
     mask_offsets_workspace_.gpu(max_batch * max_detections);
     mask_shapes_workspace_.gpu(max_batch * max_detections * 2);
 
@@ -85,7 +88,8 @@ void RfDetrSegPostprocess::forward(
     int num_queries,
     int mask_height,
     int mask_width,
-    cudaStream_t stream)
+    cudaStream_t stream,
+    const float *d2i)
 {
     if (total_images <= 0 || num_queries <= 0)
         return;
@@ -103,7 +107,7 @@ void RfDetrSegPostprocess::forward(
     if (config_.return_masks)
     {
         d_detection_masks = detection_masks_workspace_.gpu(
-            total_images * config_.max_detections * mask_height * mask_width);
+            total_images * config_.max_detections * kMaskOutputSize * kMaskOutputSize);
     }
     int *d_mask_offsets = mask_offsets_workspace_.gpu(total_images * config_.max_detections);
     int *d_mask_shapes  = mask_shapes_workspace_.gpu(total_images * config_.max_detections * 2);
@@ -170,6 +174,13 @@ void RfDetrSegPostprocess::forward(
         d_cub_temp,
         cub_sort_temp_storage_bytes_,
         stream);
+
+    // 将检测框从模型输入坐标系映射回原图坐标系
+    if (d2i != nullptr)
+    {
+        map_boxes_to_image(
+            d_boxes, d2i, total_images, config_.max_detections, stream);
+    }
 }
 
 } // namespace rfdetr_seg_postprocess

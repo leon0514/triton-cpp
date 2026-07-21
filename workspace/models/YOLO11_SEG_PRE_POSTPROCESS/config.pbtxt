@@ -6,13 +6,16 @@ input [
     name: "model_output"
     data_type: TYPE_FP32
     dims: [116, 8400]
-  }
-]
-input [
+  },
   {
     name: "mask_protos"
     data_type: TYPE_FP32
     dims: [32, 160, 160]
+  },
+  {
+    name: "transform_metadata"
+    data_type: TYPE_FP32
+    dims: [6]
   }
 ]
 output [

@@ -56,6 +56,10 @@ ensemble_scheduling {
         key: "model_output"
         value: "output0"
       }
+      input_map {
+        key: "transform_metadata"
+        value: "transform_metadata"
+      }
       output_map {
         key: "num_dets"
         value: "num_dets"

@@ -144,7 +144,6 @@
             :image-src="imageUrl"
             :detections="filteredDetections"
             :model-type="modelType"
-            :transform="result?.transform"
             :show-boxes="showBoxes"
             :show-labels="showLabels"
             :show-scores="showScores"

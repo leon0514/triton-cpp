@@ -6,6 +6,7 @@
 #ifndef __YOLO11_POSE_POSTPROCESS_IMPL_HPP__
 #define __YOLO11_POSE_POSTPROCESS_IMPL_HPP__
 
+#include "common/map_boxes.hpp"
 #include "common/memory.hpp"
 #include "yolo11_pose_postprocess/yolo11_pose_postprocess_kernel.hpp"
 
@@ -62,13 +63,16 @@ class Yolo11PosePostprocess
      * @param total_images     总图像数（动态 batch 之和）
      * @param num_anchors      anchor 数量
      * @param stream           CUDA 流
+     * @param d2i              [total_images, 6] 仿射矩阵（device），可选；非空时
+     *                         将检测框和关键点映射回原图坐标系。
      */
     void forward(
         const void *input,
         bool input_is_half,
         int total_images,
         int num_anchors,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const float *d2i = nullptr);
 
     inline const Yolo11PosePostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }

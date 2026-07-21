@@ -5,6 +5,7 @@ max_batch_size: 16
 # YOLO26 one-to-one (NMS-free) seg head 输出：
 #   output0: [batch, 300, 38] -> [x1, y1, x2, y2, score, class, mask1..mask32]
 #   output1: [batch, 32, 160, 160] 分割原型
+#   transform_metadata: [batch, 6] 预处理逆变换矩阵（d2i）
 
 input [
   {
@@ -18,6 +19,11 @@ input [
     name: "mask_protos"
     data_type: TYPE_FP32
     dims: [32, 160, 160]
+  },
+  {
+    name: "transform_metadata"
+    data_type: TYPE_FP32
+    dims: [6]
   }
 ]
 

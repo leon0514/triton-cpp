@@ -126,6 +126,41 @@ void yolo11_seg_postprocess_gpu(
     size_t cub_temp_storage_bytes,
     cudaStream_t stream);
 
+/**
+ * @brief 使用 cuBLAS GEMM 计算 mask，再裁剪并 resize 到 160x160。
+ *
+ * 在调用本函数前，必须先调用 yolo11_seg_postprocess_gpu 完成 decode + NMS，
+ * 得到 d_num_dets、d_boxes、d_det_to_cand_idx 和 d_sort_candidates_out。
+ */
+void yolo11_seg_compute_masks_gpu(
+    const void *input,
+    const void *mask_protos,
+    bool input_is_half,
+    int total_images,
+    int num_anchors,
+    int num_classes,
+    int num_masks,
+    int proto_h,
+    int proto_w,
+    int input_width,
+    int input_height,
+    bool anchors_first,
+    const int *d_num_dets,
+    const int *d_det_to_cand_idx,
+    const Candidate *d_candidates,
+    int max_detections,
+    int max_candidates,
+    const float *d_boxes,
+    float *d_detection_masks,
+    int *d_mask_offsets,
+    int *d_mask_shapes,
+    cublasHandle_t cublas_handle,
+    float *d_coefficients,
+    float *d_raw_masks,
+    float *d_proto_fp32,
+    int *h_num_dets,
+    cudaStream_t stream);
+
 } // namespace yolo11_seg_postprocess
 
 #endif // __YOLO11_SEG_POSTPROCESS_KERNEL_HPP__

@@ -15,6 +15,8 @@
 namespace rfdetr_seg_postprocess
 {
 
+constexpr int kMaskOutputSize = 160;
+
 // RF-DETR ONNX 输出 labels 维度为 91：
 //   - dim 0 为背景/无目标槽位
 //   - dim 1..90 对应官方 COCO ID 1..90
@@ -150,6 +152,7 @@ __global__ void init_output_kernel(
     float *scores,
     int *classes,
     int *det_to_query_idx,
+    float *detection_masks,
     int *mask_offsets,
     int *mask_shapes)
 {
@@ -172,6 +175,16 @@ __global__ void init_output_kernel(
     {
         mask_shapes[idx * 2 + 0] = 0;
         mask_shapes[idx * 2 + 1] = 0;
+    }
+
+    constexpr int MASK_SIZE = kMaskOutputSize;
+    if (detection_masks != nullptr)
+    {
+        int mask_total = total_images * max_detections * MASK_SIZE * MASK_SIZE;
+        for (int i = idx; i < mask_total; i += total)
+        {
+            detection_masks[i] = 0.0f;
+        }
     }
 
     if (idx < total_images)
@@ -234,15 +247,23 @@ __global__ void compute_masks_kernel(
     int *mask_offsets,
     int *mask_shapes)
 {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = total_images * max_detections;
-    if (idx >= total)
+    constexpr int MASK_SIZE = kMaskOutputSize;
+    int b = blockIdx.y;
+    int k = blockIdx.x;
+
+    if (b >= total_images || k >= max_detections)
         return;
 
-    int b = idx / max_detections;
-    int k = idx % max_detections;
+    int idx = b * max_detections + k;
 
-    if (k >= num_dets[b])
+    int nd = num_dets[b];
+
+    int out_idx = idx * MASK_SIZE * MASK_SIZE;
+    mask_offsets[idx] = out_idx;
+    mask_shapes[idx * 2 + 0] = MASK_SIZE;
+    mask_shapes[idx * 2 + 1] = MASK_SIZE;
+
+    if (k >= nd)
         return;
 
     int query_idx = det_to_query_idx[idx];
@@ -271,28 +292,32 @@ __global__ void compute_masks_kernel(
     int cw = xm2 - xm1;
     int ch = ym2 - ym1;
 
-    int slot_size = mask_height * mask_width;
-    int offset = (b * max_detections + k) * slot_size;
-
-    mask_offsets[idx] = offset;
-    mask_shapes[idx * 2 + 0] = ch;
-    mask_shapes[idx * 2 + 1] = cw;
+    float *out = detection_masks + out_idx;
 
     if (cw <= 0 || ch <= 0)
+    {
+        for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
+        {
+            out[tid] = 0.0f;
+        }
         return;
+    }
 
     const T *src = masks + ((b * num_queries + query_idx) * mask_height * mask_width);
-    float *out = detection_masks + offset;
 
-    for (int y = ym1; y < ym2; ++y)
+    for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
     {
-        for (int x = xm1; x < xm2; ++x)
-        {
-            float logit = static_cast<float>(src[y * mask_width + x]);
-            int oy = y - ym1;
-            int ox = x - xm1;
-            out[oy * cw + ox] = sigmoid(logit);
-        }
+        int oy = tid / MASK_SIZE;
+        int ox = tid % MASK_SIZE;
+
+        float px = xm1 + (ox + 0.5f) * static_cast<float>(cw) / MASK_SIZE;
+        float py = ym1 + (oy + 0.5f) * static_cast<float>(ch) / MASK_SIZE;
+
+        int mx = min(mask_width - 1, max(0, (int)floorf(px)));
+        int my = min(mask_height - 1, max(0, (int)floorf(py)));
+
+        float logit = static_cast<float>(src[my * mask_width + mx]);
+        out[tid] = sigmoid(logit);
     }
 }
 
@@ -421,7 +446,7 @@ void rfdetr_seg_postprocess_gpu(
     init_output_kernel<<<grid_out, block, 0, stream>>>(
         total_images, max_detections,
         d_num_dets, d_boxes, d_scores, d_classes,
-        d_det_to_query_idx, d_mask_offsets, d_mask_shapes);
+        d_det_to_query_idx, d_detection_masks, d_mask_offsets, d_mask_shapes);
     checkRuntime(cudaPeekAtLastError());
 
     // 5. 写前 max_detections 个结果
@@ -436,10 +461,10 @@ void rfdetr_seg_postprocess_gpu(
     // 6. 计算 mask（可选）
     if (parse_masks && d_detection_masks != nullptr)
     {
-        const int grid_masks = (total_out + block - 1) / block;
+        dim3 grid_masks(max_detections, total_images);
         if (input_is_half)
         {
-            compute_masks_kernel<<<grid_masks, block, 0, stream>>>(
+            compute_masks_kernel<<<grid_masks, 256, 0, stream>>>(
                 reinterpret_cast<const half *>(masks),
                 d_boxes, d_num_dets, d_det_to_query_idx,
                 total_images, num_queries, max_detections,
@@ -449,7 +474,7 @@ void rfdetr_seg_postprocess_gpu(
         }
         else
         {
-            compute_masks_kernel<<<grid_masks, block, 0, stream>>>(
+            compute_masks_kernel<<<grid_masks, 256, 0, stream>>>(
                 reinterpret_cast<const float *>(masks),
                 d_boxes, d_num_dets, d_det_to_query_idx,
                 total_images, num_queries, max_detections,

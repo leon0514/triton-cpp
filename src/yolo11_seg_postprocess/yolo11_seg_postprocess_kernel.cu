@@ -8,12 +8,15 @@
 
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cublas_v2.h>
 #include <float.h>
 
 #include <cub/cub.cuh>
 
 namespace yolo11_seg_postprocess
 {
+
+constexpr int kMaskOutputSize = 160;
 
 static __device__ __forceinline__ float iou(
     float x1, float y1, float x2, float y2,
@@ -255,15 +258,142 @@ __global__ void compute_segment_offsets_kernel(
     end_offsets[idx]   = begin + min(counts[idx], max_candidates);
 }
 
-// 将 mask 计算与裁剪合二为一：只计算检测框在 proto 分辨率下的裁剪区域。
-// 每个 block 处理一个 (batch, det)，线程并行遍历裁剪区域内的像素。
+// 阶段 1：将 mask 系数从 output0 收集到连续矩阵 [max_batch*max_detections, num_masks]
+// 仅填充有效检测，无效位置保持 0（不会被 GEMM 使用）
 template <typename T>
-__global__ void compute_and_crop_masks_kernel(
+__global__ void gather_coefficients_kernel(
     const T *input,
-    const T *protos,
+    const Candidate *candidates,
     const int *num_dets,
     const int *det_to_cand_idx,
-    const Candidate *candidates,
+    int total_images,
+    int num_anchors,
+    int num_classes,
+    int num_masks,
+    int max_detections,
+    int max_candidates,
+    bool anchors_first,
+    float *coefficients)
+{
+    int b = blockIdx.y;
+    int det = blockIdx.x;
+
+    if (b >= total_images || det >= num_dets[b])
+        return;
+
+    int cand_idx = det_to_cand_idx[b * max_detections + det];
+    int anchor_idx = candidates[b * max_candidates + cand_idx].anchor_idx;
+    int num_channels = num_classes + 4 + num_masks;
+
+    float *dst = coefficients + (b * max_detections + det) * num_masks;
+
+    for (int i = threadIdx.x; i < num_masks; i += blockDim.x)
+    {
+        dst[i] = read_output0(
+            input, b, anchor_idx, 4 + num_classes + i,
+            num_anchors, num_channels, anchors_first);
+    }
+}
+
+// 阶段 1 辅助：将 FP16 prototype 转换为 FP32，供 cuBLAS 使用
+__global__ void convert_fp16_to_fp32_kernel(
+    const __half *src,
+    float *dst,
+    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n)
+    {
+        dst[idx] = __half2float(src[idx]);
+    }
+}
+
+// 阶段 2：从 raw_masks 裁剪并 resize 到 160x160，同时设置 mask 元数据
+// 每个 block 处理一个 (batch, det)，每个线程处理一个输出像素
+__global__ void crop_resize_masks_kernel(
+    const float *raw_masks,
+    const float *boxes,
+    const int *num_dets,
+    int total_images,
+    int proto_h,
+    int proto_w,
+    int input_width,
+    int input_height,
+    int max_detections,
+    float *detection_masks,
+    int *mask_offsets,
+    int *mask_shapes)
+{
+    constexpr int MASK_SIZE = kMaskOutputSize;
+    int b = blockIdx.y;
+    int det = blockIdx.x;
+
+    if (b >= total_images || det >= max_detections)
+        return;
+
+    int nd = num_dets[b];
+    int out_idx = b * max_detections * MASK_SIZE * MASK_SIZE + det * MASK_SIZE * MASK_SIZE;
+    mask_offsets[b * max_detections + det] = out_idx;
+    mask_shapes[(b * max_detections + det) * 2 + 0] = MASK_SIZE;
+    mask_shapes[(b * max_detections + det) * 2 + 1] = MASK_SIZE;
+
+    if (det >= nd)
+    {
+        // init_output_kernel 已将整个 mask 缓冲区清零
+        return;
+    }
+
+    const float *box = boxes + (b * max_detections + det) * 4;
+
+    float scale_x = static_cast<float>(proto_w) / static_cast<float>(input_width);
+    float scale_y = static_cast<float>(proto_h) / static_cast<float>(input_height);
+
+    float x1p = box[0] * scale_x;
+    float y1p = box[1] * scale_y;
+    float x2p = box[2] * scale_x;
+    float y2p = box[3] * scale_y;
+
+    int x1 = max(0, min(proto_w - 1, (int)floorf(x1p)));
+    int y1 = max(0, min(proto_h - 1, (int)floorf(y1p)));
+    int x2 = max(0, min(proto_w, (int)ceilf(x2p)));
+    int y2 = max(0, min(proto_h, (int)ceilf(y2p)));
+
+    int crop_w = x2 - x1;
+    int crop_h = y2 - y1;
+
+    float *dst = detection_masks + out_idx;
+
+    if (crop_w <= 0 || crop_h <= 0)
+    {
+        for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
+        {
+            dst[tid] = 0.0f;
+        }
+        return;
+    }
+
+    const float *src = raw_masks + (b * max_detections + det) * proto_h * proto_w;
+
+    for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
+    {
+        int oy = tid / MASK_SIZE;
+        int ox = tid % MASK_SIZE;
+
+        float px = x1 + (ox + 0.5f) * static_cast<float>(crop_w) / MASK_SIZE;
+        float py = y1 + (oy + 0.5f) * static_cast<float>(crop_h) / MASK_SIZE;
+
+        int sx = min(proto_w - 1, max(0, (int)floorf(px)));
+        int sy = min(proto_h - 1, max(0, (int)floorf(py)));
+
+        float val = src[sy * proto_w + sx];
+        dst[tid] = 1.0f / (1.0f + expf(-val));
+    }
+}
+
+void yolo11_seg_compute_masks_gpu(
+    const void *input,
+    const void *mask_protos,
+    bool input_is_half,
     int total_images,
     int num_anchors,
     int num_classes,
@@ -273,101 +403,124 @@ __global__ void compute_and_crop_masks_kernel(
     int input_width,
     int input_height,
     bool anchors_first,
+    const int *d_num_dets,
+    const int *d_det_to_cand_idx,
+    const Candidate *d_candidates,
     int max_detections,
     int max_candidates,
-    const float *boxes,
-    float *detection_masks,
-    int *mask_offsets,
-    int *mask_shapes)
+    const float *d_boxes,
+    float *d_detection_masks,
+    int *d_mask_offsets,
+    int *d_mask_shapes,
+    cublasHandle_t cublas_handle,
+    float *d_coefficients,
+    float *d_raw_masks,
+    float *d_proto_fp32,
+    int *h_num_dets,
+    cudaStream_t stream)
 {
-    int b = blockIdx.y;
-    int det = blockIdx.x;
-
-    if (b >= total_images || det >= max_detections)
+    if (total_images <= 0)
         return;
 
-    int nd = num_dets[b];
-    if (det >= nd)
+    const int proto_pixels = proto_h * proto_w;
+
+    // 1. 读取 num_dets 到 CPU，用于按 batch 调用 GEMM
+    checkRuntime(cudaMemcpyAsync(h_num_dets, d_num_dets, total_images * sizeof(int),
+                                   cudaMemcpyDeviceToHost, stream));
+    checkRuntime(cudaStreamSynchronize(stream));
+
+    // 2. 收集系数到连续矩阵 [max_batch*max_detections, num_masks]
+    dim3 grid_coeffs(max_detections, total_images);
+    if (input_is_half)
     {
-        mask_offsets[b * max_detections + det] = -1;
-        mask_shapes[(b * max_detections + det) * 2 + 0] = 0;
-        mask_shapes[(b * max_detections + det) * 2 + 1] = 0;
-        return;
+        gather_coefficients_kernel<<<grid_coeffs, 256, 0, stream>>>(
+            static_cast<const __half *>(input),
+            d_candidates, d_num_dets, d_det_to_cand_idx,
+            total_images, num_anchors, num_classes, num_masks,
+            max_detections, max_candidates, anchors_first,
+            d_coefficients);
+    }
+    else
+    {
+        gather_coefficients_kernel<<<grid_coeffs, 256, 0, stream>>>(
+            static_cast<const float *>(input),
+            d_candidates, d_num_dets, d_det_to_cand_idx,
+            total_images, num_anchors, num_classes, num_masks,
+            max_detections, max_candidates, anchors_first,
+            d_coefficients);
+    }
+    checkRuntime(cudaPeekAtLastError());
+
+    // 3. 准备 FP32 prototype
+    const int proto_total = total_images * num_masks * proto_pixels;
+    const float *d_proto_fp32_ptr = nullptr;
+    if (input_is_half)
+    {
+        convert_fp16_to_fp32_kernel<<<(proto_total + 255) / 256, 256, 0, stream>>>(
+            static_cast<const __half *>(mask_protos),
+            d_proto_fp32,
+            proto_total);
+        checkRuntime(cudaPeekAtLastError());
+        d_proto_fp32_ptr = d_proto_fp32;
+    }
+    else
+    {
+        d_proto_fp32_ptr = static_cast<const float *>(mask_protos);
     }
 
-    const float *box = boxes + (b * max_detections + det) * 4;
+    // 4. 按 batch 调用 cuBLAS GEMM：
+    //    raw_masks_b = coefficients_b [N_b, num_masks] × proto_b [num_masks, proto_pixels]
+    // 使用 CUBLAS_OP_N, N 配合 row-major 数据的 reinterpretation，得到 row-major 输出。
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
 
-    // 将检测框（输入图像坐标）映射到 prototype 分辨率
-    float scale_x = static_cast<float>(proto_w) / static_cast<float>(input_width);
-    float scale_y = static_cast<float>(proto_h) / static_cast<float>(input_height);
-
-    float x1p = box[0] * scale_x;
-    float y1p = box[1] * scale_y;
-    float x2p = box[2] * scale_x;
-    float y2p = box[3] * scale_y;
-
-    // 裁剪到原型边界
-    int x1 = max(0, min(proto_w - 1, (int)floorf(x1p)));
-    int y1 = max(0, min(proto_h - 1, (int)floorf(y1p)));
-    int x2 = max(0, min(proto_w, (int)ceilf(x2p)));
-    int y2 = max(0, min(proto_h, (int)ceilf(y2p)));
-
-    int crop_w = x2 - x1;
-    int crop_h = y2 - y1;
-
-    int out_idx = b * max_detections * proto_h * proto_w + det * proto_h * proto_w;
-
-    mask_offsets[b * max_detections + det] = out_idx;
-    mask_shapes[(b * max_detections + det) * 2 + 0] = crop_h;
-    mask_shapes[(b * max_detections + det) * 2 + 1] = crop_w;
-
-    if (crop_w <= 0 || crop_h <= 0)
-        return;
-
-    int cand_idx = det_to_cand_idx[b * max_detections + det];
-    int anchor_idx = candidates[b * max_candidates + cand_idx].anchor_idx;
-
-    int num_channels = num_classes + 4 + num_masks;
-
-    // 将当前检测框的 mask 系数加载到共享内存，避免重复全局内存读取
-    extern __shared__ float s_coeffs[];
-    for (int i = threadIdx.x; i < num_masks; i += blockDim.x)
+    for (int b = 0; b < total_images; ++b)
     {
-        s_coeffs[i] = read_output0(
-            input, b, anchor_idx, 4 + num_classes + i,
-            num_anchors, num_channels, anchors_first);
-    }
-    __syncthreads();
+        int n_b = h_num_dets[b];
+        if (n_b <= 0)
+            continue;
 
-    float *dst = detection_masks + out_idx;
-    int crop_size = crop_h * crop_w;
+        const float *coeffs_b = d_coefficients + b * max_detections * num_masks;
+        const float *proto_b = d_proto_fp32_ptr + b * num_masks * proto_pixels;
+        float *raw_masks_b = d_raw_masks + b * max_detections * proto_pixels;
 
-    for (int tid = threadIdx.x; tid < crop_size; tid += blockDim.x)
-    {
-        int dy = tid / crop_w;
-        int dx = tid % crop_w;
-        int sy = y1 + dy;
-        int sx = x1 + dx;
+        cublasStatus_t status = cublasSgemm(
+            cublas_handle,
+            CUBLAS_OP_N, CUBLAS_OP_N,
+            proto_pixels, n_b, num_masks,
+            &alpha,
+            proto_b, proto_pixels,
+            coeffs_b, num_masks,
+            &beta,
+            raw_masks_b, proto_pixels);
 
-        float val = 0.0f;
-        for (int m = 0; m < num_masks; ++m)
+        if (status != CUBLAS_STATUS_SUCCESS)
         {
-            float proto_val = read_proto(
-                protos, b, m, sy, sx,
-                num_masks, proto_h, proto_w);
-            val += s_coeffs[m] * proto_val;
+            fprintf(stderr, "[yolo11_seg_compute_masks_gpu] cublasSgemm failed for batch %d: %d\n", b, status);
         }
-
-        // sigmoid
-        dst[tid] = 1.0f / (1.0f + expf(-val));
     }
+
+    // 5. 裁剪并 resize 到 160x160
+    dim3 grid_crop(max_detections, total_images);
+    crop_resize_masks_kernel<<<grid_crop, 256, 0, stream>>>(
+        d_raw_masks,
+        d_boxes,
+        d_num_dets,
+        total_images,
+        proto_h,
+        proto_w,
+        input_width,
+        input_height,
+        max_detections,
+        d_detection_masks,
+        d_mask_offsets,
+        d_mask_shapes);
+    checkRuntime(cudaPeekAtLastError());
 }
 
 __global__ void init_output_kernel(
     int total_images,
     int max_detections,
-    int proto_h,
-    int proto_w,
     int *num_dets,
     float *boxes,
     float *scores,
@@ -391,7 +544,8 @@ __global__ void init_output_kernel(
     mask_shapes[idx * 2 + 0] = 0;
     mask_shapes[idx * 2 + 1] = 0;
 
-    int mask_total = total_images * max_detections * proto_h * proto_w;
+    constexpr int MASK_SIZE = kMaskOutputSize;
+    int mask_total = total_images * max_detections * MASK_SIZE * MASK_SIZE;
     for (int i = idx; i < mask_total; i += total)
     {
         detection_masks[i] = 0.0f;
@@ -471,7 +625,7 @@ void yolo11_seg_postprocess_gpu(
     int total_out = total_images * max_detections;
     int grid_out  = (total_out + block - 1) / block;
     init_output_kernel<<<grid_out, block, 0, stream>>>(
-        total_images, max_detections, proto_h, proto_w,
+        total_images, max_detections,
         d_num_dets, d_boxes, d_scores, d_classes,
         d_detection_masks, d_mask_offsets, d_mask_shapes);
     checkRuntime(cudaPeekAtLastError());
@@ -520,34 +674,8 @@ void yolo11_seg_postprocess_gpu(
         iou_thresh, d_num_dets, d_boxes, d_scores, d_classes, d_det_to_cand_idx);
     checkRuntime(cudaPeekAtLastError());
 
-    // 计算并裁剪 mask：每个 block 处理一个 (batch, det)，只计算裁剪区域内的像素。
-    // 候选框同样从排序输出读取（anchor_idx 关联 mask 系数）。
-    dim3 grid_crop(max_detections, total_images);
-    int shared_mem_bytes = num_masks * sizeof(float);
-
-    if (input_is_half)
-    {
-        compute_and_crop_masks_kernel<<<grid_crop, 256, shared_mem_bytes, stream>>>(
-            static_cast<const __half *>(input),
-            static_cast<const __half *>(mask_protos),
-            d_num_dets, d_det_to_cand_idx, d_sort_candidates_out,
-            total_images, num_anchors, num_classes, num_masks,
-            proto_h, proto_w, input_width, input_height,
-            anchors_first, max_detections, max_candidates,
-            d_boxes, d_detection_masks, d_mask_offsets, d_mask_shapes);
-    }
-    else
-    {
-        compute_and_crop_masks_kernel<<<grid_crop, 256, shared_mem_bytes, stream>>>(
-            static_cast<const float *>(input),
-            static_cast<const float *>(mask_protos),
-            d_num_dets, d_det_to_cand_idx, d_sort_candidates_out,
-            total_images, num_anchors, num_classes, num_masks,
-            proto_h, proto_w, input_width, input_height,
-            anchors_first, max_detections, max_candidates,
-            d_boxes, d_detection_masks, d_mask_offsets, d_mask_shapes);
-    }
-    checkRuntime(cudaPeekAtLastError());
+    // mask 计算已拆分到 yolo11_seg_compute_masks_gpu 中，使用 cuBLAS GEMM + 轻量裁剪核。
+}
 }
 
 } // namespace yolo11_seg_postprocess

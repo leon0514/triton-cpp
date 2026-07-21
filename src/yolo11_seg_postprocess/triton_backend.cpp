@@ -171,6 +171,7 @@ struct ModelInstanceState
     cudaStream_t stream = nullptr;
     tensor::Memory<uint8_t> output0_workspace_;
     tensor::Memory<uint8_t> output1_workspace_;
+    tensor::Memory<float> transform_workspace_;
     CompletionQueue completion_queue;
     int *h_num_dets_pinned = nullptr;
     size_t pinned_capacity = 0;
@@ -256,6 +257,11 @@ struct RequestInfo
     int64_t output1_mem_type_id = 0;
     const void *output0_base = nullptr;
     const void *output1_base = nullptr;
+
+    bool transform_on_device = false;
+    int64_t transform_mem_type_id = 0;
+    const void *transform_base = nullptr;
+    uint64_t total_transform_bytes = 0;
 
     void *num_dets_buffer = nullptr;
     void *boxes_buffer = nullptr;
@@ -389,9 +395,9 @@ ExtractModelOutputsFromRequest(
 
     uint32_t input_count;
     RETURN_IF_ERROR(TRITONBACKEND_RequestInputCount(request, &input_count));
-    if (input_count != 2)
+    if (input_count != 3)
     {
-        RETURN_TRITON_ERROR(INVALID_ARG, "Exactly two input tensors per request are required");
+        RETURN_TRITON_ERROR(INVALID_ARG, "Exactly three input tensors per request are required: model_output, mask_protos and transform_metadata");
     }
 
     // output0
@@ -543,6 +549,53 @@ ExtractModelOutputsFromRequest(
     info.output1_mem_type_id = output1_mem_type_id;
     info.output1_datatype = output1_datatype;
 
+    // transform_metadata
+    TRITONBACKEND_Input *transform_input;
+    RETURN_IF_ERROR(TRITONBACKEND_RequestInput(request, "transform_metadata", &transform_input));
+
+    const char *transform_name;
+    TRITONSERVER_DataType transform_datatype;
+    const int64_t *transform_shape;
+    uint32_t transform_dims_count;
+    uint32_t transform_buffer_count;
+    uint64_t transform_byte_size;
+
+    RETURN_IF_ERROR(TRITONBACKEND_InputProperties(
+        transform_input, &transform_name, &transform_datatype, &transform_shape,
+        &transform_dims_count, &transform_byte_size, &transform_buffer_count));
+
+    if (transform_datatype != TRITONSERVER_TYPE_FP32)
+    {
+        RETURN_TRITON_ERROR(INVALID_ARG, "transform_metadata data type must be FP32");
+    }
+
+    if (transform_dims_count != 2 || transform_shape[0] != n || transform_shape[1] != 6)
+    {
+        RETURN_TRITON_ERROR(INVALID_ARG, "transform_metadata must be [N, 6]");
+    }
+
+    if (transform_byte_size != static_cast<size_t>(n) * 6 * sizeof(float))
+    {
+        RETURN_TRITON_ERROR(INVALID_ARG, "transform_metadata byte size mismatch");
+    }
+
+    if (transform_buffer_count != 1)
+    {
+        RETURN_TRITON_ERROR(INVALID_ARG, "transform_metadata buffer count must be 1");
+    }
+
+    const void *transform_buffer;
+    TRITONSERVER_MemoryType transform_mem_type;
+    int64_t transform_mem_type_id;
+    RETURN_IF_ERROR(TRITONBACKEND_InputBuffer(
+        transform_input, 0, &transform_buffer, &transform_byte_size,
+        &transform_mem_type, &transform_mem_type_id));
+
+    info.total_transform_bytes = transform_byte_size;
+    info.transform_base = transform_buffer;
+    info.transform_on_device = (transform_mem_type == TRITONSERVER_MEMORY_GPU);
+    info.transform_mem_type_id = transform_mem_type_id;
+
     return nullptr;
 }
 
@@ -615,6 +668,7 @@ TRITONBACKEND_ModelInstanceExecute(
     const int max_detections = postprocessor->max_detections();
     const int proto_h = postprocessor->proto_height();
     const int proto_w = postprocessor->proto_width();
+    constexpr int kMaskOutputSize = 160;
 
     // 1. 提取所有 request 信息
     std::vector<RequestInfo> infos;
@@ -696,6 +750,7 @@ TRITONBACKEND_ModelInstanceExecute(
     int total_images = 0;
     uint64_t total_output0_bytes = 0;
     uint64_t total_output1_bytes = 0;
+    uint64_t total_transform_bytes = 0;
     int num_anchors = infos[0].num_anchors;
 
     for (auto &info : infos)
@@ -704,6 +759,7 @@ TRITONBACKEND_ModelInstanceExecute(
         total_images += info.batch_size;
         total_output0_bytes += info.total_output0_bytes;
         total_output1_bytes += info.total_output1_bytes;
+        total_transform_bytes += info.total_transform_bytes;
 
         if (info.num_anchors != num_anchors)
         {
@@ -784,14 +840,50 @@ TRITONBACKEND_ModelInstanceExecute(
         d_output1     = output1_base_ptr;
     }
 
-    // 6. 执行后处理
+    // 6. 准备 transform_metadata device buffer
+    float *d_transform = nullptr;
+    {
+        float *transform_base_ptr = instance_state->transform_workspace_.gpu(total_transform_bytes / sizeof(float));
+        if (total_transform_bytes > 0 && transform_base_ptr == nullptr)
+        {
+            guard.SetError(TRITONSERVER_ErrorNew(
+                TRITONSERVER_ERROR_INTERNAL, "Failed to allocate transform device workspace"));
+            return nullptr;
+        }
+
+        uint64_t transform_offset = 0;
+        for (const auto &info : infos)
+        {
+            const size_t bytes = info.total_transform_bytes;
+            if (bytes == 0)
+            {
+                continue;
+            }
+            float *dst = transform_base_ptr + transform_offset;
+            cudaError_t err = CopyBufferToDevice(
+                dst, info.transform_base, bytes,
+                info.transform_on_device, static_cast<int>(info.transform_mem_type_id),
+                device_id, stream);
+            if (err != cudaSuccess)
+            {
+                guard.SetError(TRITONSERVER_ErrorNew(
+                    TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(err)));
+                return nullptr;
+            }
+            transform_offset += info.batch_size * 6;
+        }
+        d_transform = transform_base_ptr;
+    }
+
+    // 7. 执行后处理
     postprocessor->forward(
         d_output0,
         d_output1,
         input_is_half,
         total_images,
         num_anchors,
-        stream);
+        stream,
+        d_transform);
 
     int *d_num_dets = postprocessor->num_detections_gpu();
     float *d_boxes = postprocessor->boxes_gpu();
@@ -865,7 +957,7 @@ TRITONBACKEND_ModelInstanceExecute(
         const int64_t scores_shape[2] = {infos[i].batch_size, actual_num_dets};
         const int64_t classes_shape[2] = {infos[i].batch_size, actual_num_dets};
         const int64_t detection_masks_shape[2] = {
-            infos[i].batch_size, actual_num_dets * proto_h * proto_w};
+            infos[i].batch_size, actual_num_dets * kMaskOutputSize * kMaskOutputSize};
         const int64_t mask_offsets_shape[2] = {infos[i].batch_size, actual_num_dets};
         const int64_t mask_shapes_shape[3] = {infos[i].batch_size, actual_num_dets, 2};
 
@@ -874,7 +966,7 @@ TRITONBACKEND_ModelInstanceExecute(
         const size_t scores_bytes = infos[i].batch_size * actual_num_dets * sizeof(float);
         const size_t classes_bytes = infos[i].batch_size * actual_num_dets * sizeof(int);
         const size_t detection_masks_bytes = infos[i].batch_size * actual_num_dets *
-                                             proto_h * proto_w * sizeof(float);
+                                             kMaskOutputSize * kMaskOutputSize * sizeof(float);
         const size_t mask_offsets_bytes = infos[i].batch_size * actual_num_dets * sizeof(int);
         const size_t mask_shapes_bytes = infos[i].batch_size * actual_num_dets * 2 * sizeof(int);
 
@@ -959,8 +1051,8 @@ TRITONBACKEND_ModelInstanceExecute(
 
             GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
                 info.detection_masks_buffer,
-                d_detection_masks + offset * max_detections * proto_h * proto_w,
-                info.batch_size * actual_num_dets * proto_h * proto_w * sizeof(float),
+                d_detection_masks + offset * max_detections * kMaskOutputSize * kMaskOutputSize,
+                info.batch_size * actual_num_dets * kMaskOutputSize * kMaskOutputSize * sizeof(float),
                 info.detection_masks_mem_type,
                 stream));
 
@@ -983,7 +1075,7 @@ TRITONBACKEND_ModelInstanceExecute(
                                b * actual_num_dets;
                     for (int d = 0; d < actual_num_dets; ++d)
                     {
-                        dst[d] = d * proto_h * proto_w;
+                        dst[d] = d * kMaskOutputSize * kMaskOutputSize;
                     }
                 }
             }
@@ -995,7 +1087,7 @@ TRITONBACKEND_ModelInstanceExecute(
                 {
                     for (int d = 0; d < actual_num_dets; ++d)
                     {
-                        host_offsets[b * actual_num_dets + d] = d * proto_h * proto_w;
+                        host_offsets[b * actual_num_dets + d] = d * kMaskOutputSize * kMaskOutputSize;
                     }
                 }
                 cudaError_t merr = cudaMemcpyAsync(

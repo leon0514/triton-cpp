@@ -6,6 +6,7 @@ max_batch_size: 16
 #   - dets:   [batch, 100, 4]  归一化 cxcywh 框
 #   - labels: [batch, 100, 91] 类别 logits（dim 0 为背景，dim 1..90 对应 COCO ID 1~90）
 #   - masks:  [batch, 100, 96, 96] mask logits
+#   - transform_metadata: [batch, 6] 预处理逆变换矩阵（d2i）
 
 input [
   {
@@ -22,6 +23,11 @@ input [
     name: "masks"
     data_type: TYPE_FP32
     dims: [100, -1, -1]
+  },
+  {
+    name: "transform_metadata"
+    data_type: TYPE_FP32
+    dims: [6]
   }
 ]
 
@@ -49,7 +55,7 @@ output [
   {
     name: "detection_masks"
     data_type: TYPE_FP32
-    # 1D 拼接的 mask 数据，长度由实际检测数 * 96 * 96 决定
+    # 1D 拼接的 mask 数据，长度由实际检测数 * 160 * 160 决定
     dims: [-1]
   },
   {
@@ -61,7 +67,7 @@ output [
   {
     name: "mask_shapes"
     data_type: TYPE_INT32
-    # 每个 mask 的裁剪形状 [height, width]
+    # 每个 mask 的固定形状 [160, 160]
     dims: [-1, 2]
   }
 ]

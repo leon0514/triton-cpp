@@ -6,6 +6,7 @@
 #ifndef __RFDETR_SEG_POSTPROCESS_IMPL_HPP__
 #define __RFDETR_SEG_POSTPROCESS_IMPL_HPP__
 
+#include "common/map_boxes.hpp"
 #include "common/memory.hpp"
 #include "rfdetr_seg_postprocess/rfdetr_seg_postprocess_kernel.hpp"
 
@@ -47,7 +48,8 @@ class RfDetrSegPostprocess
         int num_queries,
         int mask_height,
         int mask_width,
-        cudaStream_t stream);
+        cudaStream_t stream,
+        const float *d2i = nullptr);
 
     inline const RfDetrSegPostprocessConfig &config() const { return config_; }
     inline int max_detections() const { return config_.max_detections; }

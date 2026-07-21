@@ -73,6 +73,7 @@ include_directories(${COMMON_INCLUDE_DIRS})
 
 set(COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common/memory.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/common/map_boxes.cu
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common/norm.cpp
 )
 
@@ -194,7 +195,7 @@ target_compile_options(triton_yolo11_seg_postprocess PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
 )
-target_link_libraries(triton_yolo11_seg_postprocess CUDA::cudart Threads::Threads)
+target_link_libraries(triton_yolo11_seg_postprocess CUDA::cudart CUDA::cublas Threads::Threads)
 
 # -------------------- YOLOV5 postprocess backend --------------------
 set(YOLOV5_POSTPROCESS_SOURCES
@@ -314,7 +315,7 @@ target_compile_options(triton_yolo26_seg_postprocess PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
 )
-target_link_libraries(triton_yolo26_seg_postprocess CUDA::cudart Threads::Threads)
+target_link_libraries(triton_yolo26_seg_postprocess CUDA::cudart CUDA::cublas Threads::Threads)
 
 # -------------------- RF-DETR postprocess backend --------------------
 set(RFDETR_POSTPROCESS_SOURCES

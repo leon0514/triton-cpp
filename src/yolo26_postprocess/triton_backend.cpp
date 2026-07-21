@@ -171,6 +171,7 @@ struct ModelInstanceState
     std::unique_ptr<yolo26_postprocess::Yolo26Postprocess> postprocessor;
     cudaStream_t stream = nullptr;
     tensor::Memory<uint8_t> input_workspace_;
+    tensor::Memory<float> transform_workspace_;
     int *h_num_dets_pinned = nullptr;
     size_t pinned_capacity = 0;
     CompletionQueue completion_queue;
@@ -248,6 +249,10 @@ struct RequestInfo
     bool input_on_device = false;
     int64_t input_mem_type_id = 0;
     const void *input_base = nullptr;
+
+    bool transform_on_device = false;
+    int64_t transform_mem_type_id = 0;
+    const void *transform_base = nullptr;
 
     void *num_dets_buffer = nullptr;
     void *boxes_buffer = nullptr;
@@ -371,13 +376,14 @@ ExtractModelOutputFromRequest(
 
     uint32_t input_count;
     RETURN_IF_ERROR(TRITONBACKEND_RequestInputCount(request, &input_count));
-    if (input_count != 1)
+    if (input_count != 2)
     {
-        RETURN_TRITON_ERROR(INVALID_ARG, "Only one input tensor per request is supported");
+        RETURN_TRITON_ERROR(INVALID_ARG, "Exactly two input tensors per request are required: model_output and transform_metadata");
     }
 
-    TRITONBACKEND_Input *input;
-    RETURN_IF_ERROR(TRITONBACKEND_RequestInputByIndex(request, 0, &input));
+    // 1. model_output
+    TRITONBACKEND_Input *model_input;
+    RETURN_IF_ERROR(TRITONBACKEND_RequestInput(request, "model_output", &model_input));
 
     const char *input_name;
     TRITONSERVER_DataType input_datatype;
@@ -387,18 +393,18 @@ ExtractModelOutputFromRequest(
     uint64_t input_byte_size;
 
     RETURN_IF_ERROR(TRITONBACKEND_InputProperties(
-        input, &input_name, &input_datatype, &input_shape,
+        model_input, &input_name, &input_datatype, &input_shape,
         &input_dims_count, &input_byte_size, &input_buffer_count));
 
     if (input_datatype != TRITONSERVER_TYPE_FP32 &&
         input_datatype != TRITONSERVER_TYPE_FP16)
     {
-        RETURN_TRITON_ERROR(INVALID_ARG, "Input data type must be FP32 or FP16");
+        RETURN_TRITON_ERROR(INVALID_ARG, "model_output data type must be FP32 or FP16");
     }
 
     if (input_dims_count != 3)
     {
-        RETURN_TRITON_ERROR(INVALID_ARG, "Input must be 3-D [N, P, 6] tensor");
+        RETURN_TRITON_ERROR(INVALID_ARG, "model_output must be 3-D [N, P, 6] tensor");
     }
 
     int n = static_cast<int>(input_shape[0]);
@@ -407,12 +413,12 @@ ExtractModelOutputFromRequest(
 
     if (feat != 6)
     {
-        RETURN_TRITON_ERROR(INVALID_ARG, "Input last dim must equal 6");
+        RETURN_TRITON_ERROR(INVALID_ARG, "model_output last dim must equal 6");
     }
 
     if (n <= 0 || p <= 0)
     {
-        RETURN_TRITON_ERROR(INVALID_ARG, "Input dimensions must be positive");
+        RETURN_TRITON_ERROR(INVALID_ARG, "model_output dimensions must be positive");
     }
 
     info.num_predictions = p;
@@ -421,19 +427,19 @@ ExtractModelOutputFromRequest(
         (input_datatype == TRITONSERVER_TYPE_FP16 ? sizeof(uint16_t) : sizeof(float));
     if (input_byte_size != expected_bytes)
     {
-        RETURN_TRITON_ERROR(INVALID_ARG, "Input byte size mismatch");
+        RETURN_TRITON_ERROR(INVALID_ARG, "model_output byte size mismatch");
     }
 
     if (input_buffer_count != 1)
     {
-        RETURN_TRITON_ERROR(INVALID_ARG, "Input buffer count must be 1");
+        RETURN_TRITON_ERROR(INVALID_ARG, "model_output buffer count must be 1");
     }
 
     const void *buffer;
     TRITONSERVER_MemoryType mem_type;
     int64_t mem_type_id;
     RETURN_IF_ERROR(TRITONBACKEND_InputBuffer(
-        input, 0, &buffer, &input_byte_size, &mem_type, &mem_type_id));
+        model_input, 0, &buffer, &input_byte_size, &mem_type, &mem_type_id));
 
     info.batch_size        = n;
     info.total_input_bytes = input_byte_size;
@@ -441,6 +447,52 @@ ExtractModelOutputFromRequest(
     info.input_on_device   = (mem_type == TRITONSERVER_MEMORY_GPU);
     info.input_mem_type_id = mem_type_id;
     info.input_datatype    = input_datatype;
+
+    // 2. transform_metadata
+    TRITONBACKEND_Input *transform_input;
+    RETURN_IF_ERROR(TRITONBACKEND_RequestInput(request, "transform_metadata", &transform_input));
+
+    const char *transform_name;
+    TRITONSERVER_DataType transform_datatype;
+    const int64_t *transform_shape;
+    uint32_t transform_dims_count;
+    uint32_t transform_buffer_count;
+    uint64_t transform_byte_size;
+
+    RETURN_IF_ERROR(TRITONBACKEND_InputProperties(
+        transform_input, &transform_name, &transform_datatype, &transform_shape,
+        &transform_dims_count, &transform_byte_size, &transform_buffer_count));
+
+    if (transform_datatype != TRITONSERVER_TYPE_FP32)
+    {
+        RETURN_TRITON_ERROR(INVALID_ARG, "transform_metadata data type must be FP32");
+    }
+
+    if (transform_dims_count != 2 || transform_shape[0] != n || transform_shape[1] != 6)
+    {
+        RETURN_TRITON_ERROR(INVALID_ARG, "transform_metadata must be [N, 6]");
+    }
+
+    if (transform_byte_size != static_cast<size_t>(n) * 6 * sizeof(float))
+    {
+        RETURN_TRITON_ERROR(INVALID_ARG, "transform_metadata byte size mismatch");
+    }
+
+    if (transform_buffer_count != 1)
+    {
+        RETURN_TRITON_ERROR(INVALID_ARG, "transform_metadata buffer count must be 1");
+    }
+
+    const void *transform_buffer;
+    TRITONSERVER_MemoryType transform_mem_type;
+    int64_t transform_mem_type_id;
+    RETURN_IF_ERROR(TRITONBACKEND_InputBuffer(
+        transform_input, 0, &transform_buffer, &transform_byte_size,
+        &transform_mem_type, &transform_mem_type_id));
+
+    info.transform_base        = transform_buffer;
+    info.transform_on_device   = (transform_mem_type == TRITONSERVER_MEMORY_GPU);
+    info.transform_mem_type_id = transform_mem_type_id;
 
     return nullptr;
 }
@@ -642,20 +694,57 @@ TRITONBACKEND_ModelInstanceExecute(
 
     const void *d_input = input_base_ptr;
 
-    // 6. 执行后处理（输出写入实例预分配的 GPU workspace）
+    // 6. 准备 transform_metadata device buffer
+    float *d_transform = nullptr;
+    {
+        const size_t transform_bytes = static_cast<size_t>(total_images) * 6 * sizeof(float);
+        float *transform_base_ptr = instance_state->transform_workspace_.gpu(transform_bytes / sizeof(float));
+        if (transform_bytes > 0 && transform_base_ptr == nullptr)
+        {
+            guard.SetError(TRITONSERVER_ErrorNew(
+                TRITONSERVER_ERROR_INTERNAL, "Failed to allocate transform device workspace"));
+            return nullptr;
+        }
+
+        uint64_t transform_offset = 0;
+        for (const auto &info : infos)
+        {
+            const size_t bytes = static_cast<size_t>(info.batch_size) * 6 * sizeof(float);
+            if (bytes == 0)
+            {
+                continue;
+            }
+            float *dst = transform_base_ptr + transform_offset;
+            cudaError_t err = CopyBufferToDevice(
+                dst, info.transform_base, bytes,
+                info.transform_on_device, static_cast<int>(info.transform_mem_type_id),
+                device_id, stream);
+            if (err != cudaSuccess)
+            {
+                guard.SetError(TRITONSERVER_ErrorNew(
+                    TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(err)));
+                return nullptr;
+            }
+            transform_offset += info.batch_size * 6;
+        }
+        d_transform = transform_base_ptr;
+    }
+
+    // 7. 执行后处理（输出写入实例预分配的 GPU workspace）
     postprocessor->forward(
         d_input,
         input_is_half,
         total_images,
         num_predictions,
-        stream);
+        stream,
+        d_transform);
 
     int *d_num_dets = postprocessor->num_detections_gpu();
     float *d_boxes  = postprocessor->boxes_gpu();
     float *d_scores = postprocessor->scores_gpu();
     int *d_classes  = postprocessor->classes_gpu();
 
-    // 7. 把每个样本的实际 num_dets 拷贝到主机，用于动态输出 shape
+    // 8. 把每个样本的实际 num_dets 拷贝到主机，用于动态输出 shape
     if (static_cast<size_t>(total_images) > instance_state->pinned_capacity)
     {
         if (instance_state->h_num_dets_pinned != nullptr)
@@ -702,7 +791,7 @@ TRITONBACKEND_ModelInstanceExecute(
     }
     int *h_num_dets = instance_state->h_num_dets_pinned;
 
-    // 8. 根据实际 num_dets 分配动态输出 buffer
+    // 9. 根据实际 num_dets 分配动态输出 buffer
     for (int i = 0; i < request_num; ++i)
     {
         int offset = infos[i].image_offset;
@@ -756,7 +845,7 @@ TRITONBACKEND_ModelInstanceExecute(
             &infos[i].classes_mem_type_id));
     }
 
-    // 9. 将结果从预分配 workspace 分发到各 response 的 output buffer
+    // 10. 将结果从预分配 workspace 分发到各 response 的 output buffer
     for (const auto &info : infos)
     {
         const int offset = info.image_offset;
@@ -794,7 +883,7 @@ TRITONBACKEND_ModelInstanceExecute(
         }
     }
 
-    // 10. 记录 CUDA event，将响应发送交给后台线程
+    // 11. 记录 CUDA event，将响应发送交给后台线程
     cudaEvent_t event;
     cudaError_t err = cudaEventCreateWithFlags(&event, cudaEventDisableTiming);
     if (err != cudaSuccess)
