@@ -1,0 +1,53 @@
+name: "SAHI_PREPROCESS"
+backend: "sahi_preprocess"
+max_batch_size: 0
+
+input [
+  {
+    name: "raw_image"
+    data_type: TYPE_UINT8
+    dims: [-1, -1, 3]
+  }
+]
+
+output [
+  {
+    name: "sliced_images"
+    data_type: TYPE_UINT8
+    dims: [-1, 640, 640, 3]
+  },
+  {
+    name: "slice_offsets"
+    data_type: TYPE_INT32
+    dims: [-1, 4]
+  }
+]
+
+parameters: {
+  key: "slice_width"
+  value: { string_value: "640" }
+}
+parameters: {
+  key: "slice_height"
+  value: { string_value: "640" }
+}
+parameters: {
+  key: "overlap_width_ratio"
+  value: { string_value: "0.2" }
+}
+parameters: {
+  key: "overlap_height_ratio"
+  value: { string_value: "0.2" }
+}
+parameters: {
+  key: "max_slices"
+  value: { string_value: "64" }
+}
+
+instance_group [
+  {
+    count: 1
+    kind: KIND_GPU
+    gpus: [0]
+  }
+]

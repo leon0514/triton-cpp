@@ -388,6 +388,30 @@ target_compile_options(triton_classifier_postprocess PRIVATE
 )
 target_link_libraries(triton_classifier_postprocess CUDA::cudart Threads::Threads)
 
+# -------------------- SAHI preprocess backend --------------------
+set(SAHI_PREPROCESS_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sahi_preprocess/slice_kernel.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sahi_preprocess/slice_impl.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sahi_preprocess/triton_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sahi_preprocess/triton_backend.cpp
+)
+
+add_library(triton_sahi_preprocess SHARED ${SAHI_PREPROCESS_SOURCES} ${COMMON_SOURCES})
+set_target_properties(triton_sahi_preprocess PROPERTIES
+    OUTPUT_NAME "triton_sahi_preprocess"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    POSITION_INDEPENDENT_CODE ON
+)
+if(CMAKE_CUDA_ARCHITECTURES)
+    set_property(TARGET triton_sahi_preprocess PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
+endif()
+target_compile_options(triton_sahi_preprocess PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+)
+target_link_libraries(triton_sahi_preprocess CUDA::cudart Threads::Threads)
+
 # Triton backend libraries
 if(TRITON_DIR)
     find_library(TRITON_BACKEND_API_LIB
@@ -415,6 +439,7 @@ if(TRITON_DIR)
         target_link_libraries(triton_rfdetr_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_rfdetr_seg_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_classifier_postprocess ${TRITON_BACKEND_API_LIB})
+        target_link_libraries(triton_sahi_preprocess ${TRITON_BACKEND_API_LIB})
     endif()
     if(TRITON_SERVER_API_LIB)
         target_link_libraries(triton_preprocess ${TRITON_SERVER_API_LIB})
@@ -430,9 +455,10 @@ if(TRITON_DIR)
         target_link_libraries(triton_rfdetr_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_rfdetr_seg_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_classifier_postprocess ${TRITON_SERVER_API_LIB})
+        target_link_libraries(triton_sahi_preprocess ${TRITON_SERVER_API_LIB})
     endif()
 endif()
 
-install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolo11_seg_postprocess triton_yolov5_postprocess triton_yolo26_postprocess triton_yolo26_pose_postprocess triton_yolo26_obb_postprocess triton_yolo26_seg_postprocess triton_rfdetr_postprocess triton_rfdetr_seg_postprocess triton_classifier_postprocess
+install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolo11_seg_postprocess triton_yolov5_postprocess triton_yolo26_postprocess triton_yolo26_pose_postprocess triton_yolo26_obb_postprocess triton_yolo26_seg_postprocess triton_rfdetr_postprocess triton_rfdetr_seg_postprocess triton_classifier_postprocess triton_sahi_preprocess
     LIBRARY DESTINATION lib
 )
