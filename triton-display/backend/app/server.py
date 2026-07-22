@@ -240,10 +240,10 @@ async def infer(
             outputs=outputs,
         )
 
-        num_dets = response.as_numpy("num_dets")[0, 0].item()
-        boxes = response.as_numpy("detection_boxes")[0]  # [max_dets, ...]
-        scores = response.as_numpy("detection_scores")[0]
-        classes = response.as_numpy("detection_classes")[0]
+        num_dets = response.as_numpy("num_dets").reshape(-1)[0].item()
+        boxes = response.as_numpy("detection_boxes")  # [max_dets, ...]
+        scores = response.as_numpy("detection_scores")
+        classes = response.as_numpy("detection_classes")
 
         result = {
             "model_type": "detection",

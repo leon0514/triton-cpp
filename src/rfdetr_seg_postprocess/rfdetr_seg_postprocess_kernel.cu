@@ -459,7 +459,7 @@ void rfdetr_seg_postprocess_gpu(
         d_det_to_query_idx);
     checkRuntime(cudaPeekAtLastError());
     // 6. 计算 mask（可选）
-    float ms_masks = 0.0f;
+    // float ms_masks = 0.0f;
     if (parse_masks && d_detection_masks != nullptr)
     {
         dim3 grid_masks(max_detections, total_images);
