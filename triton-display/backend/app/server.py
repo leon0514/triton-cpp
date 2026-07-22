@@ -240,10 +240,11 @@ async def infer(
             outputs=outputs,
         )
 
+        # reshape(-1, ...) 兼容有/无 batch 维度（SAHI max_batch_size=0 vs 直调 max_batch_size=16）
         num_dets = response.as_numpy("num_dets").reshape(-1)[0].item()
-        boxes = response.as_numpy("detection_boxes")  # [max_dets, ...]
-        scores = response.as_numpy("detection_scores")
-        classes = response.as_numpy("detection_classes")
+        boxes = response.as_numpy("detection_boxes").reshape(-1, response.as_numpy("detection_boxes").shape[-1])
+        scores = response.as_numpy("detection_scores").reshape(-1)
+        classes = response.as_numpy("detection_classes").reshape(-1)
 
         result = {
             "model_type": "detection",
@@ -263,13 +264,16 @@ async def infer(
             }
 
             if "pose" in model_name_lower:
-                kpts = response.as_numpy("detection_keypoints")[0, i]
+                kpts_raw = response.as_numpy("detection_keypoints")
+                kpts = kpts_raw.reshape(-1, kpts_raw.shape[-2], kpts_raw.shape[-1])[i]
                 det["keypoints"] = kpts.tolist()
 
             if "seg" in model_name_lower:
-                masks = response.as_numpy("detection_masks")[0]
-                offsets = response.as_numpy("mask_offsets")[0]
-                shapes = response.as_numpy("mask_shapes")[0]
+                masks_raw = response.as_numpy("detection_masks")
+                masks = masks_raw.reshape(-1, masks_raw.shape[-1])[i]
+                offsets = response.as_numpy("mask_offsets").reshape(-1)
+                shapes_raw = response.as_numpy("mask_shapes")
+                shapes = shapes_raw.reshape(-1, shapes_raw.shape[-1])
                 off = int(offsets[i])
                 h, w = int(shapes[i, 0]), int(shapes[i, 1])
                 if h > 0 and w > 0 and off >= 0:

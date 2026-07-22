@@ -1,4 +1,4 @@
-name: "SAHI_YOLO11_DET_ENSEMBLE"
+name: "SAHI_YOLO11_SEG_ENSEMBLE"
 backend: "sahi_ensemble"
 max_batch_size: 0
 
@@ -11,35 +11,22 @@ input [
 ]
 
 output [
-  {
-    name: "num_dets"
-    data_type: TYPE_INT32
-    dims: [1]
-  },
-  {
-    name: "detection_boxes"
-    data_type: TYPE_FP32
-    dims: [300, 4]
-  },
-  {
-    name: "detection_scores"
-    data_type: TYPE_FP32
-    dims: [300]
-  },
-  {
-    name: "detection_classes"
-    data_type: TYPE_INT32
-    dims: [300]
-  }
+  { name: "num_dets", data_type: TYPE_INT32, dims: [1] },
+  { name: "detection_boxes", data_type: TYPE_FP32, dims: [300, 4] },
+  { name: "detection_scores", data_type: TYPE_FP32, dims: [300] },
+  { name: "detection_classes", data_type: TYPE_INT32, dims: [300] },
+  { name: "detection_masks", data_type: TYPE_FP32, dims: [300, 25600] },
+  { name: "mask_offsets", data_type: TYPE_INT32, dims: [300] },
+  { name: "mask_shapes", data_type: TYPE_INT32, dims: [300, 2] }
 ]
 
 parameters: {
   key: "output_type"
-  value: { string_value: "det" }
+  value: { string_value: "seg" }
 }
 parameters: {
   key: "detector_model"
-  value: { string_value: "YOLO11_DET_PRE_ENSEMBLE" }
+  value: { string_value: "YOLO11_SEG_PRE_ENSEMBLE" }
 }
 parameters: {
   key: "conf_threshold"
@@ -60,6 +47,10 @@ parameters: {
 parameters: {
   key: "num_classes"
   value: { string_value: "80" }
+}
+parameters: {
+  key: "mask_output_size"
+  value: { string_value: "160" }
 }
 parameters: {
   key: "slice_width"

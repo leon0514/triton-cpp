@@ -53,6 +53,15 @@ TRITONSERVER_Error *ParseEnsembleConfig(
 
         const auto &parameters = model_config.value("parameters", nlohmann::json::object());
 
+        // 输出类型
+        std::string out_type = GetStringParameter(parameters, "output_type");
+        if (out_type == "pose")
+            config.output_type = OutputType::POSE;
+        else if (out_type == "seg")
+            config.output_type = OutputType::SEG;
+        else
+            config.output_type = OutputType::DET;
+
         // 检测模型名称
         std::string det_model = GetStringParameter(parameters, "detector_model");
         if (!det_model.empty())
@@ -78,6 +87,14 @@ TRITONSERVER_Error *ParseEnsembleConfig(
         std::string num_cls = GetStringParameter(parameters, "num_classes");
         if (!num_cls.empty())
             config.num_classes = std::stoi(num_cls);
+
+        std::string num_kpts = GetStringParameter(parameters, "num_keypoints");
+        if (!num_kpts.empty())
+            config.num_keypoints = std::stoi(num_kpts);
+
+        std::string mask_sz = GetStringParameter(parameters, "mask_output_size");
+        if (!mask_sz.empty())
+            config.mask_output_size = std::stoi(mask_sz);
 
         // SAHI 切片参数
         std::string sw = GetStringParameter(parameters, "slice_width");

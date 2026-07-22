@@ -929,31 +929,46 @@ namespace yolo11_pose_postprocess_backend
 
                 if (actual_num_dets > 0)
                 {
-                    GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                    // Workspace uses [total_images, max_detections, ...] strided layout.
+                    // Output buffer is contiguous [batch_size, actual_num_dets, ...].
+                    // Use 2-D pitched copy to skip padding between images in workspace.
+                    GUARDED_RETURN_IF_ERROR(CopyOutputStrided2D(
                         info.boxes_buffer,
                         d_boxes + offset * max_detections * 4,
-                        info.batch_size * actual_num_dets * 4 * sizeof(float),
+                        actual_num_dets * 4 * sizeof(float), // width per image
+                        max_detections * 4 * sizeof(float),  // src pitch (workspace stride)
+                        actual_num_dets * 4 * sizeof(float), // dst pitch (output stride)
+                        info.batch_size,                     // height (num images)
                         info.boxes_mem_type,
                         stream));
 
-                    GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                    GUARDED_RETURN_IF_ERROR(CopyOutputStrided2D(
                         info.scores_buffer,
                         d_scores + offset * max_detections,
-                        info.batch_size * actual_num_dets * sizeof(float),
+                        actual_num_dets * sizeof(float),
+                        max_detections * sizeof(float),
+                        actual_num_dets * sizeof(float),
+                        info.batch_size,
                         info.scores_mem_type,
                         stream));
 
-                    GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                    GUARDED_RETURN_IF_ERROR(CopyOutputStrided2D(
                         info.classes_buffer,
                         d_classes + offset * max_detections,
-                        info.batch_size * actual_num_dets * sizeof(int),
+                        actual_num_dets * sizeof(int),
+                        max_detections * sizeof(int),
+                        actual_num_dets * sizeof(int),
+                        info.batch_size,
                         info.classes_mem_type,
                         stream));
 
-                    GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
+                    GUARDED_RETURN_IF_ERROR(CopyOutputStrided2D(
                         info.keypoints_buffer,
                         d_keypoints + offset * max_detections * num_keypoints * keypoint_dim,
-                        info.batch_size * actual_num_dets * num_keypoints * keypoint_dim * sizeof(float),
+                        actual_num_dets * num_keypoints * keypoint_dim * sizeof(float),
+                        max_detections * num_keypoints * keypoint_dim * sizeof(float),
+                        actual_num_dets * num_keypoints * keypoint_dim * sizeof(float),
+                        info.batch_size,
                         info.keypoints_mem_type,
                         stream));
                 }

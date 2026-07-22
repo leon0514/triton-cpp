@@ -1,4 +1,4 @@
-name: "SAHI_YOLO11_DET_ENSEMBLE"
+name: "SAHI_YOLO11_POSE_ENSEMBLE"
 backend: "sahi_ensemble"
 max_batch_size: 0
 
@@ -11,35 +11,20 @@ input [
 ]
 
 output [
-  {
-    name: "num_dets"
-    data_type: TYPE_INT32
-    dims: [1]
-  },
-  {
-    name: "detection_boxes"
-    data_type: TYPE_FP32
-    dims: [300, 4]
-  },
-  {
-    name: "detection_scores"
-    data_type: TYPE_FP32
-    dims: [300]
-  },
-  {
-    name: "detection_classes"
-    data_type: TYPE_INT32
-    dims: [300]
-  }
+  { name: "num_dets", data_type: TYPE_INT32, dims: [1] },
+  { name: "detection_boxes", data_type: TYPE_FP32, dims: [300, 4] },
+  { name: "detection_scores", data_type: TYPE_FP32, dims: [300] },
+  { name: "detection_classes", data_type: TYPE_INT32, dims: [300] },
+  { name: "detection_keypoints", data_type: TYPE_FP32, dims: [300, 17, 3] }
 ]
 
 parameters: {
   key: "output_type"
-  value: { string_value: "det" }
+  value: { string_value: "pose" }
 }
 parameters: {
   key: "detector_model"
-  value: { string_value: "YOLO11_DET_PRE_ENSEMBLE" }
+  value: { string_value: "YOLO11_POSE_PRE_ENSEMBLE" }
 }
 parameters: {
   key: "conf_threshold"
@@ -59,7 +44,11 @@ parameters: {
 }
 parameters: {
   key: "num_classes"
-  value: { string_value: "80" }
+  value: { string_value: "1" }
+}
+parameters: {
+  key: "num_keypoints"
+  value: { string_value: "17" }
 }
 parameters: {
   key: "slice_width"

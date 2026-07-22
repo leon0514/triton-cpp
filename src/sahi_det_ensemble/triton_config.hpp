@@ -13,8 +13,13 @@ namespace sahi_det_ensemble_backend
 {
 
 // SAHI + Detection Ensemble 配置
+enum class OutputType { DET, POSE, SEG };
+
 struct EnsembleConfig
 {
+    // 输出类型：det | pose | seg
+    OutputType output_type = OutputType::DET;
+
     // 检测模型名称（ensemble 模型，包含 preprocess + inference + postprocess）
     std::string detector_model = "YOLO11_DET_PRE_ENSEMBLE";
 
@@ -28,6 +33,12 @@ struct EnsembleConfig
 
     // 类别数（用于 NMS 分组）
     int num_classes = 80;
+
+    // Pose 关键点数（仅 pose 模式）
+    int num_keypoints = 17;
+
+    // Seg 掩码输出尺寸（仅 seg 模式）
+    int mask_output_size = 160;
 
     // SAHI 切片配置
     int slice_width = 640;

@@ -65,7 +65,7 @@ static __global__ void filter_offset_kernel(
     out_boxes[idx * 4 + 3] = y2;
     out_scores[idx] = score;
     out_classes[idx] = det_classes[tid];
-    out_slice_idx[idx] = si;
+    out_slice_idx[idx] = tid;  // 存储原始 flat index（可还原 si 和 di）
 }
 
 void filter_and_offset(
@@ -163,6 +163,30 @@ void strided_copy_classes(
     int block = 256;
     int grid = (total + block - 1) / block;
     strided_copy_classes_kernel<<<grid, block, 0, stream>>>(
+        src, dst, n, src_stride, dst_stride);
+}
+
+static __global__ void strided_copy_keypoints_kernel(
+    const float *__restrict__ src, float *__restrict__ dst,
+    int n, int src_stride, int dst_stride)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = n * src_stride;
+    if (idx >= total) return;
+    int img = idx / src_stride;
+    int off = idx % src_stride;
+    dst[img * dst_stride + off] = src[idx];
+}
+
+void strided_copy_keypoints(
+    const float *src, float *dst,
+    int n, int src_stride, int dst_stride,
+    cudaStream_t stream)
+{
+    int total = n * src_stride;
+    int block = 256;
+    int grid = (total + block - 1) / block;
+    strided_copy_keypoints_kernel<<<grid, block, 0, stream>>>(
         src, dst, n, src_stride, dst_stride);
 }
 

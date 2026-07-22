@@ -64,6 +64,11 @@ void strided_copy_classes(
     int n, int src_stride, int dst_stride,
     cudaStream_t stream);
 
+void strided_copy_keypoints(
+    const float *src, float *dst,
+    int n, int src_stride, int dst_stride,
+    cudaStream_t stream);
+
 /**
  * @brief Top-K 选择 + 填充到固定维度输出。
  */
