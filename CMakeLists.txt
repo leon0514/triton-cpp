@@ -413,6 +413,29 @@ target_compile_options(triton_sahi_preprocess PRIVATE
 )
 target_link_libraries(triton_sahi_preprocess CUDA::cudart Threads::Threads)
 
+# -------------------- SAHI + Detection Ensemble backend --------------------
+set(SAHI_DET_ENSEMBLE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sahi_det_ensemble/sahi_det_ensemble_kernel.cu
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sahi_det_ensemble/triton_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/sahi_det_ensemble/triton_backend.cpp
+)
+
+add_library(triton_sahi_det_ensemble SHARED ${SAHI_DET_ENSEMBLE_SOURCES} ${COMMON_SOURCES})
+set_target_properties(triton_sahi_det_ensemble PROPERTIES
+    OUTPUT_NAME "triton_sahi_det_ensemble"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    POSITION_INDEPENDENT_CODE ON
+)
+if(CMAKE_CUDA_ARCHITECTURES)
+    set_property(TARGET triton_sahi_det_ensemble PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
+endif()
+target_compile_options(triton_sahi_det_ensemble PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+)
+target_link_libraries(triton_sahi_det_ensemble CUDA::cudart Threads::Threads)
+
 # Triton backend libraries
 if(TRITON_DIR)
     find_library(TRITON_BACKEND_API_LIB
@@ -441,6 +464,7 @@ if(TRITON_DIR)
         target_link_libraries(triton_rfdetr_seg_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_classifier_postprocess ${TRITON_BACKEND_API_LIB})
         target_link_libraries(triton_sahi_preprocess ${TRITON_BACKEND_API_LIB})
+        target_link_libraries(triton_sahi_det_ensemble ${TRITON_BACKEND_API_LIB})
     endif()
     if(TRITON_SERVER_API_LIB)
         target_link_libraries(triton_preprocess ${TRITON_SERVER_API_LIB})
@@ -457,9 +481,10 @@ if(TRITON_DIR)
         target_link_libraries(triton_rfdetr_seg_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_classifier_postprocess ${TRITON_SERVER_API_LIB})
         target_link_libraries(triton_sahi_preprocess ${TRITON_SERVER_API_LIB})
+        target_link_libraries(triton_sahi_det_ensemble ${TRITON_SERVER_API_LIB})
     endif()
 endif()
 
-install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolo11_seg_postprocess triton_yolov5_postprocess triton_yolo26_postprocess triton_yolo26_pose_postprocess triton_yolo26_obb_postprocess triton_yolo26_seg_postprocess triton_rfdetr_postprocess triton_rfdetr_seg_postprocess triton_classifier_postprocess triton_sahi_preprocess
+install(TARGETS triton_preprocess triton_yolo11_postprocess triton_yolo11_pose_postprocess triton_yolo11_obb_postprocess triton_yolo11_seg_postprocess triton_yolov5_postprocess triton_yolo26_postprocess triton_yolo26_pose_postprocess triton_yolo26_obb_postprocess triton_yolo26_seg_postprocess triton_rfdetr_postprocess triton_rfdetr_seg_postprocess triton_classifier_postprocess triton_sahi_preprocess triton_sahi_det_ensemble
     LIBRARY DESTINATION lib
 )
