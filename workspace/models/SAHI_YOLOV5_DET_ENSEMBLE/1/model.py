@@ -1,12 +1,11 @@
-"""SAHI Ensemble BLS Model (v3 optimized)
+"""SAHI Ensemble BLS Model (v4 optimized)
 Orchestrates SAHI slicing -> batched detection -> box merge -> per-class NMS.
 
-Key fixes & optimizations vs v2:
-  - [BUGFIX] Output shape matches config.pbtxt (no extra batch dim)
-  - [BUGFIX] Per-class NMS (cross-class boxes no longer incorrectly suppressed)
+Key fixes & optimizations vs v3:
+  - [PERF] Zero-copy GPU: sliced images stay on GPU via DLPack (no GPU->CPU->GPU)
+  - [PERF] Chunked batching: when N > detector max_batch_size, split into chunks
   - [PERF] Vectorized offset/clamp: all slices processed in one batch, no Python loop
-  - [PERF] Debug prints conditional on SAHI_DEBUG env var (no I/O syscalls in hot path)
-  - [NOTE] pb_utils.Tensor only accepts numpy, so sliced_images still does GPU->CPU->GPU
+  - [PERF] Debug prints conditional on SAHI_DEBUG env var
 """
 
 import json
@@ -91,6 +90,7 @@ class TritonPythonModel:
         self.conf_threshold = float(params.get('conf_threshold', '0.25'))
         self.iou_threshold = float(params.get('iou_threshold', '0.45'))
         self.max_detections = int(params.get('max_detections', '300'))
+        self.chunk_size = int(params.get('chunk_size', '16'))
 
         self.det_output_names = ['num_dets', 'detection_boxes',
                                  'detection_scores', 'detection_classes']
@@ -120,30 +120,27 @@ class TritonPythonModel:
             if sahi_resp.has_error():
                 raise pb_utils.TritonModelException(sahi_resp.error().message())
 
-            # Extract sliced_images shape + offsets, then release GPU refs ASAP
-            # to avoid OOM when detector allocates its own GPU buffers.
-            # NOTE: Triton may squeeze the batch dim when N==1, so force
-            # atleast_4d for sliced_cp and atleast_2d for slice_offsets.
+            # Extract sliced_images as cupy (zero-copy from SAHI GPU output).
+            # Keep on GPU — detector will read the same memory via DLPack.
             sliced_gpu = pb_utils.get_output_tensor_by_name(sahi_resp, 'sliced_images')
             sliced_cp = cp.from_dlpack(sliced_gpu.to_dlpack())
             if sliced_cp.ndim == 3:
                 sliced_cp = sliced_cp.reshape(1, *sliced_cp.shape)
             N = sliced_cp.shape[0]
-            sliced_images_np = cp.asnumpy(sliced_cp)  # GPU -> CPU copy
 
             slice_offsets = np.atleast_2d(_gpu_tensor_to_numpy(
                 pb_utils.get_output_tensor_by_name(sahi_resp, 'slice_offsets')))
 
-            # Release all GPU memory from SAHI before detector allocates
-            del sliced_cp, sliced_gpu, sahi_resp
-            cp.get_default_memory_pool().free_all_blocks()
-
             if _DEBUG:
                 print(f"[SAHI_BLS] N={N} offsets={slice_offsets}", flush=True)
 
-            # ---- 3. Batched detection ----
+            # ---- 3. Batched detection (zero-copy GPU, chunked if N > chunk_size) ----
             all_boxes, all_scores, all_classes = self._batched_detect(
-                sliced_images_np, N, slice_offsets, W, H)
+                sliced_cp, N, slice_offsets, W, H)
+
+            # Release SAHI GPU memory after detector has consumed it
+            del sliced_cp, sliced_gpu, sahi_resp
+            cp.get_default_memory_pool().free_all_blocks()
 
             # ---- 4. Merge + per-class NMS ----
             out_tensors = self._merge_nms(all_boxes, all_scores, all_classes)
@@ -152,80 +149,97 @@ class TritonPythonModel:
         return responses
 
     # ------------------------------------------------------------------
-    #  Batched detection: [N, H, W, 3] -> vectorized post-process
+    #  Chunked batched detection: zero-copy GPU (DLPack), auto-chunked
+    #  when N > detector max_batch_size.
     # ------------------------------------------------------------------
-    def _batched_detect(self, sliced_images_np, N, slice_offsets, W, H):
-        """Run all N slices through detector in ONE batched call.
-        sliced_images_np: [N, 640, 640, 3] uint8 numpy array (already on CPU).
+    def _batched_detect(self, sliced_cp, N, slice_offsets, W, H):
+        """Zero-copy batched detection via DLPack. Chunked if N > chunk_size.
+        sliced_cp: [N, 640, 640, 3] cupy uint8 array on GPU (shared with SAHI output).
         Returns vectorized boxes/scores/classes (no per-slice Python loop)."""
 
-        det_resp = pb_utils.InferenceRequest(
-            model_name=self.detector_model,
-            requested_output_names=self.det_output_names,
-            inputs=[pb_utils.Tensor('raw_image', sliced_images_np)],
-        ).exec()
-        if det_resp.has_error():
-            raise pb_utils.TritonModelException(det_resp.error().message())
+        all_boxes = []
+        all_scores = []
+        all_classes = []
 
-        # One-time conversion of all batched GPU outputs.
-        # NOTE: when N==1 Triton may squeeze the batch dim, so we force the
-        # expected dimensionality with atleast_2d/3d.
-        num_dets_arr = _gpu_tensor_to_numpy(
-            pb_utils.get_output_tensor_by_name(det_resp, 'num_dets'))        # [N] or [N, 1]
-        boxes_arr = np.atleast_3d(_gpu_tensor_to_numpy(
-            pb_utils.get_output_tensor_by_name(det_resp, 'detection_boxes')))  # [N, M, 4]
-        scores_arr = np.atleast_2d(_gpu_tensor_to_numpy(
-            pb_utils.get_output_tensor_by_name(det_resp, 'detection_scores'))) # [N, M]
-        classes_arr = np.atleast_2d(_gpu_tensor_to_numpy(
-            pb_utils.get_output_tensor_by_name(det_resp, 'detection_classes')))# [N, M]
+        for start in range(0, N, self.chunk_size):
+            end = min(start + self.chunk_size, N)
+            chunk = sliced_cp[start:end]  # zero-copy cupy view
+            chunk_offsets = slice_offsets[start:end]
+            chunk_N = end - start
 
-        if _DEBUG:
-            print(f"[SAHI_BLS] num_dets_per_slice={num_dets_arr.squeeze()}", flush=True)
+            # Zero-copy: ascontiguousarray + from_dlpack — same GPU memory
+            chunk = cp.ascontiguousarray(chunk)
+            chunk_tensor = pb_utils.Tensor.from_dlpack('raw_image', chunk.toDlpack())
+            det_resp = pb_utils.InferenceRequest(
+                model_name=self.detector_model,
+                requested_output_names=self.det_output_names,
+                inputs=[chunk_tensor],
+            ).exec()
+            if det_resp.has_error():
+                raise pb_utils.TritonModelException(det_resp.error().message())
 
-        # ---- Vectorized: flatten all slices' detections into one pass ----
-        ndets_per_slice = num_dets_arr.reshape(-1).astype(int)  # [N], handles [N] or [N,1]
-        total_dets = ndets_per_slice.sum()
+            num_dets_arr = _gpu_tensor_to_numpy(
+                pb_utils.get_output_tensor_by_name(det_resp, 'num_dets'))
+            boxes_arr = np.atleast_3d(_gpu_tensor_to_numpy(
+                pb_utils.get_output_tensor_by_name(det_resp, 'detection_boxes')))
+            scores_arr = np.atleast_2d(_gpu_tensor_to_numpy(
+                pb_utils.get_output_tensor_by_name(det_resp, 'detection_scores')))
+            classes_arr = np.atleast_2d(_gpu_tensor_to_numpy(
+                pb_utils.get_output_tensor_by_name(det_resp, 'detection_classes')))
 
-        if total_dets == 0:
+            if _DEBUG:
+                print(f"[SAHI_BLS] chunk {start}:{end} num_dets={num_dets_arr.squeeze()}", flush=True)
+
+            ndets_per = num_dets_arr.reshape(-1).astype(int)
+            total_dets = ndets_per.sum()
+            if total_dets == 0:
+                continue
+
+            slice_idx = np.repeat(np.arange(start, end), ndets_per)
+            boxes_flat = np.vstack([boxes_arr[i, :ndets_per[i]] for i in range(chunk_N)])
+            scores_flat = np.hstack([scores_arr[i, :ndets_per[i]] for i in range(chunk_N)])
+            classes_flat = np.hstack([classes_arr[i, :ndets_per[i]] for i in range(chunk_N)])
+
+            keep = scores_flat >= self.conf_threshold
+            if not keep.any():
+                continue
+
+            boxes = boxes_flat[keep].astype(np.float32)
+            scores = scores_flat[keep]
+            classes = classes_flat[keep]
+            sidx = slice_idx[keep]
+
+            # Offset to original image coords
+            ox = chunk_offsets[sidx - start, 0].astype(np.float32)
+            oy = chunk_offsets[sidx - start, 1].astype(np.float32)
+            boxes[:, 0] += ox
+            boxes[:, 1] += oy
+            boxes[:, 2] += ox
+            boxes[:, 3] += oy
+
+            # Clamp
+            np.clip(boxes[:, 0], 0.0, float(W), out=boxes[:, 0])
+            np.clip(boxes[:, 1], 0.0, float(H), out=boxes[:, 1])
+            np.clip(boxes[:, 2], 0.0, float(W), out=boxes[:, 2])
+            np.clip(boxes[:, 3], 0.0, float(H), out=boxes[:, 3])
+
+            all_boxes.append(boxes)
+            all_scores.append(scores)
+            all_classes.append(classes)
+
+            del det_resp
+
+        if not all_boxes:
             return [], [], []
 
-        # Build slice index mapping: which original slice each detection belongs to
-        slice_idx = np.repeat(np.arange(N), ndets_per_slice)  # [total_dets]
-
-        # Gather all boxes/scores/classes in one flattened step
-        boxes_flat = np.vstack([boxes_arr[i, :ndets_per_slice[i]] for i in range(N)])
-        scores_flat = np.hstack([scores_arr[i, :ndets_per_slice[i]] for i in range(N)])
-        classes_flat = np.hstack([classes_arr[i, :ndets_per_slice[i]] for i in range(N)])
-
-        # ---- Confidence filter (vectorized) ----
-        keep = scores_flat >= self.conf_threshold
-        if not keep.any():
-            return [], [], []
-
-        boxes = boxes_flat[keep]
-        scores = scores_flat[keep]
-        classes = classes_flat[keep]
-        sidx = slice_idx[keep]  # slice indices for kept detections
+        all_boxes = np.concatenate(all_boxes, axis=0)
+        all_scores = np.concatenate(all_scores, axis=0)
+        all_classes = np.concatenate(all_classes, axis=0)
 
         if _DEBUG:
-            print(f"[SAHI_BLS] conf_filter: {total_dets}->{len(boxes)}", flush=True)
+            print(f"[SAHI_BLS] total after conf_filter: {len(all_boxes)}", flush=True)
 
-        # ---- Vectorized offset to original image coords ----
-        ox = slice_offsets[sidx, 0].astype(np.float32)
-        oy = slice_offsets[sidx, 1].astype(np.float32)
-
-        boxes[:, 0] += ox
-        boxes[:, 1] += oy
-        boxes[:, 2] += ox
-        boxes[:, 3] += oy
-
-        # ---- Vectorized clamp ----
-        np.clip(boxes[:, 0], 0.0, float(W), out=boxes[:, 0])
-        np.clip(boxes[:, 1], 0.0, float(H), out=boxes[:, 1])
-        np.clip(boxes[:, 2], 0.0, float(W), out=boxes[:, 2])
-        np.clip(boxes[:, 3], 0.0, float(H), out=boxes[:, 3])
-
-        return [boxes], [scores], [classes]
+        return [all_boxes], [all_scores], [all_classes]
 
     # ------------------------------------------------------------------
     #  Merge + per-class NMS (GPU)
