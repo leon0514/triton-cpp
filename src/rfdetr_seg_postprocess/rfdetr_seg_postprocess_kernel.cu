@@ -152,7 +152,6 @@ __global__ void init_output_kernel(
     float *scores,
     int *classes,
     int *det_to_query_idx,
-    float *detection_masks,
     int *mask_offsets,
     int *mask_shapes)
 {
@@ -175,16 +174,6 @@ __global__ void init_output_kernel(
     {
         mask_shapes[idx * 2 + 0] = 0;
         mask_shapes[idx * 2 + 1] = 0;
-    }
-
-    constexpr int MASK_SIZE = kMaskOutputSize;
-    if (detection_masks != nullptr)
-    {
-        int mask_total = total_images * max_detections * MASK_SIZE * MASK_SIZE;
-        for (int i = idx; i < mask_total; i += total)
-        {
-            detection_masks[i] = 0.0f;
-        }
     }
 
     if (idx < total_images)
@@ -279,22 +268,20 @@ __global__ void compute_masks_kernel(
     float sx = static_cast<float>(mask_width) / input_width;
     float sy = static_cast<float>(mask_height) / input_height;
 
-    int xm1 = static_cast<int>(floorf(x1 * sx));
-    int ym1 = static_cast<int>(floorf(y1 * sy));
-    int xm2 = static_cast<int>(ceilf(x2 * sx));
-    int ym2 = static_cast<int>(ceilf(y2 * sy));
+    float m_x1 = x1 * sx;
+    float m_y1 = y1 * sy;
+    float m_x2 = x2 * sx;
+    float m_y2 = y2 * sy;
 
-    xm1 = max(xm1, 0);
-    ym1 = max(ym1, 0);
-    xm2 = min(xm2, mask_width);
-    ym2 = min(ym2, mask_height);
-
-    int cw = xm2 - xm1;
-    int ch = ym2 - ym1;
+    // 钳位到 mask 有效范围，保留浮点精度，采样时不再 floor/ceil 取整
+    m_x1 = fmaxf(0.0f, fminf(static_cast<float>(mask_width), m_x1));
+    m_y1 = fmaxf(0.0f, fminf(static_cast<float>(mask_height), m_y1));
+    m_x2 = fmaxf(0.0f, fminf(static_cast<float>(mask_width), m_x2));
+    m_y2 = fmaxf(0.0f, fminf(static_cast<float>(mask_height), m_y2));
 
     float *out = detection_masks + out_idx;
 
-    if (cw <= 0 || ch <= 0)
+    if (m_x2 - m_x1 <= 0.0f || m_y2 - m_y1 <= 0.0f)
     {
         for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
         {
@@ -310,13 +297,28 @@ __global__ void compute_masks_kernel(
         int oy = tid / MASK_SIZE;
         int ox = tid % MASK_SIZE;
 
-        float px = xm1 + (ox + 0.5f) * static_cast<float>(cw) / MASK_SIZE;
-        float py = ym1 + (oy + 0.5f) * static_cast<float>(ch) / MASK_SIZE;
+        float px = m_x1 + static_cast<float>(ox) * (m_x2 - m_x1) / static_cast<float>(MASK_SIZE);
+        float py = m_y1 + static_cast<float>(oy) * (m_y2 - m_y1) / static_cast<float>(MASK_SIZE);
 
-        int mx = min(mask_width - 1, max(0, (int)floorf(px)));
-        int my = min(mask_height - 1, max(0, (int)floorf(py)));
+        // —— 双线性插值 ——
+        int mx0 = static_cast<int>(floorf(px));
+        int my0 = static_cast<int>(floorf(py));
+        int mx1 = min(mx0 + 1, mask_width - 1);
+        int my1 = min(my0 + 1, mask_height - 1);
+        mx0 = max(mx0, 0);
+        my0 = max(my0, 0);
 
-        float logit = static_cast<float>(src[my * mask_width + mx]);
+        float fx = px - static_cast<float>(mx0);
+        float fy = py - static_cast<float>(my0);
+
+        float v00 = static_cast<float>(src[my0 * mask_width + mx0]);
+        float v10 = static_cast<float>(src[my0 * mask_width + mx1]);
+        float v01 = static_cast<float>(src[my1 * mask_width + mx0]);
+        float v11 = static_cast<float>(src[my1 * mask_width + mx1]);
+
+        float logit = (v00 * (1.0f - fx) + v10 * fx) * (1.0f - fy) +
+                      (v01 * (1.0f - fx) + v11 * fx) * fy;
+
         out[tid] = sigmoid(logit);
     }
 }
@@ -382,13 +384,11 @@ void rfdetr_seg_postprocess_gpu(
     const int block = 256;
     const int total_cand = total_images * num_queries;
     const int grid_cand = (total_cand + block - 1) / block;
-
     // 1. 清零计数并初始化候选缓冲区
     checkRuntime(cudaMemsetAsync(d_counts, 0, total_images * sizeof(int), stream));
     init_candidates_kernel<<<grid_cand, block, 0, stream>>>(
         total_images, num_queries, d_candidates);
     checkRuntime(cudaPeekAtLastError());
-
     // 2. 置信度过滤、类别选择、坐标转换
     const int total_work = total_images * num_queries;
     const int grid_filter = (total_work + block - 1) / block;
@@ -415,15 +415,13 @@ void rfdetr_seg_postprocess_gpu(
             d_candidates, d_counts);
     }
     checkRuntime(cudaPeekAtLastError());
-
-    // 3. 一次性对所有 batch 按 score 降序排序（CUB 分段排序，避免 thrust 主机同步）
+    // 3. 一次性对所有 batch 按 score 降序排序（CUB 分段排序）
     int sort_total = total_images * num_queries;
     int grid_sort = (sort_total + block - 1) / block;
     prepare_sort_kernel<<<grid_sort, block, 0, stream>>>(
         d_candidates, sort_total,
         d_sort_keys_in, d_sort_candidates_in);
     checkRuntime(cudaPeekAtLastError());
-
     checkRuntime(cub::DeviceSegmentedRadixSort::SortPairsDescending(
         d_cub_temp, cub_temp_storage_bytes,
         d_sort_keys_in, d_sort_keys_out,
@@ -433,22 +431,25 @@ void rfdetr_seg_postprocess_gpu(
         d_sort_offsets, d_sort_offsets + 1,
         0, sizeof(float) * 8,
         stream));
-
     // 将排序后的候选框复制回 d_candidates，供 top-k 使用
     checkRuntime(cudaMemcpyAsync(
         d_candidates, d_sort_candidates_out,
         sort_total * sizeof(Candidate),
         cudaMemcpyDeviceToDevice, stream));
-
-    // 4. 清零输出缓冲区
+    // 4. 清零输出缓冲区 + mask buffer 用硬件加速清零
     const int total_out = total_images * max_detections;
     const int grid_out = (total_out + block - 1) / block;
+    if (parse_masks && d_detection_masks != nullptr)
+    {
+        constexpr int MASK_SIZE = kMaskOutputSize;
+        size_t mask_total = static_cast<size_t>(total_images) * max_detections * MASK_SIZE * MASK_SIZE;
+        checkRuntime(cudaMemsetAsync(d_detection_masks, 0, mask_total * sizeof(float), stream));
+    }
     init_output_kernel<<<grid_out, block, 0, stream>>>(
         total_images, max_detections,
         d_num_dets, d_boxes, d_scores, d_classes,
-        d_det_to_query_idx, d_detection_masks, d_mask_offsets, d_mask_shapes);
+        d_det_to_query_idx, d_mask_offsets, d_mask_shapes);
     checkRuntime(cudaPeekAtLastError());
-
     // 5. 写前 max_detections 个结果
     const int grid_batch = (total_images + block - 1) / block;
     write_topk_kernel<<<grid_batch, block, 0, stream>>>(
@@ -457,8 +458,8 @@ void rfdetr_seg_postprocess_gpu(
         d_num_dets, d_boxes, d_scores, d_classes,
         d_det_to_query_idx);
     checkRuntime(cudaPeekAtLastError());
-
     // 6. 计算 mask（可选）
+    float ms_masks = 0.0f;
     if (parse_masks && d_detection_masks != nullptr)
     {
         dim3 grid_masks(max_detections, total_images);

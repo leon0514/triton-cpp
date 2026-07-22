@@ -17,8 +17,7 @@ output [
   { name: "detection_classes", data_type: TYPE_INT32, dims: [-1] },
   { name: "detection_masks", data_type: TYPE_FP32, dims: [-1] },
   { name: "mask_offsets", data_type: TYPE_INT32, dims: [-1] },
-  { name: "mask_shapes", data_type: TYPE_INT32, dims: [-1, 2] },
-  { name: "transform_metadata", data_type: TYPE_FP32, dims: [6] }
+  { name: "mask_shapes", data_type: TYPE_INT32, dims: [-1, 2] }
 ]
 
 ensemble_scheduling {

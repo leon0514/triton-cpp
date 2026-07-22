@@ -12,6 +12,7 @@ Endpoints:
 """
 
 import os
+import base64
 import tempfile
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -168,6 +169,7 @@ async def infer(
     model_name: str,
     image: UploadFile = File(...),
     conf_threshold: float = Form(0.25),
+    raw_mask: bool = Form(False),
 ):
     """Run inference on uploaded image and return parsed results."""
     try:
@@ -273,7 +275,17 @@ async def infer(
                 if h > 0 and w > 0 and off >= 0:
                     det["mask_shape"] = [h, w]
                     det["mask_offset"] = off
-                    det["mask"] = masks[off : off + h * w].reshape(h, w).tolist()
+                    mask_data = masks[off : off + h * w].astype(np.float32)
+                    if raw_mask:
+                        det["mask"] = mask_data.tolist()
+                    else:
+                        det["mask"] = base64.b64encode(mask_data.tobytes()).decode('ascii')
+                    # 始终附带统计信息，方便调试时查看
+                    det["mask_stats"] = {
+                        "min": float(mask_data.min()),
+                        "max": float(mask_data.max()),
+                        "mean": float(mask_data.mean()),
+                    }
 
             result["detections"].append(det)
 

@@ -101,6 +101,9 @@ __global__ void decode_filter_kernel(
         obj_conf = apply_sigmoid ? sigmoid(obj_logit) : obj_logit;
     }
 
+    if (obj_conf < conf_thresh)
+        return;
+
     float max_logit = -FLT_MAX;
     int class_id    = 0;
 

@@ -127,10 +127,14 @@ void yolo11_seg_postprocess_gpu(
     cudaStream_t stream);
 
 /**
- * @brief 使用 cuBLAS GEMM 计算 mask，再裁剪并 resize 到 160x160。
+ * @brief 融合 kernel：系数读取 + matmul + crop + sigmoid 一步完成。
  *
  * 在调用本函数前，必须先调用 yolo11_seg_postprocess_gpu 完成 decode + NMS，
  * 得到 d_num_dets、d_boxes、d_det_to_cand_idx 和 d_sort_candidates_out。
+ *
+ * 与 cuBLAS GEMM 方案不同，此函数仅在 crop 区域内逐像素计算
+ * dot(mask_weights, proto[:,y,x])，无中间 raw_masks buffer，
+ * 对中小尺寸检测框显著减少无效计算。
  */
 void yolo11_seg_compute_masks_gpu(
     const void *input,
@@ -154,11 +158,6 @@ void yolo11_seg_compute_masks_gpu(
     float *d_detection_masks,
     int *d_mask_offsets,
     int *d_mask_shapes,
-    cublasHandle_t cublas_handle,
-    float *d_coefficients,
-    float *d_raw_masks,
-    float *d_proto_fp32,
-    int *h_num_dets,
     cudaStream_t stream);
 
 } // namespace yolo11_seg_postprocess

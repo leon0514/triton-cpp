@@ -72,7 +72,7 @@ async function draw() {
   canvas.value.height = currentImage.naturalHeight
   ctx.drawImage(currentImage, 0, 0)
 
-  props.detections.forEach((det) => drawDetection(det))
+  await Promise.all(props.detections.map((det) => drawDetection(det)))
 }
 
 function drawDetection(det) {
@@ -100,10 +100,17 @@ function drawSeg(det) {
   const boxH = y2 - y1
   if (boxW <= 0 || boxH <= 0) return
 
-  const mask = det.mask
-  const maskH = mask.length
-  const maskW = mask[0]?.length || 0
+  const [maskH, maskW] = det.mask_shape
   if (maskH <= 0 || maskW <= 0) return
+
+  // mask 可能是 base64 字符串，也可能是 raw_mask=1 时的 plain array
+  let mask
+  if (typeof det.mask === 'string') {
+    const raw = Uint8Array.from(atob(det.mask), c => c.charCodeAt(0))
+    mask = new Float32Array(raw.buffer)
+  } else {
+    mask = det.mask
+  }
 
   const color = getColor(det.class_id)
   const r = parseInt(color.slice(1, 3), 16)
@@ -115,17 +122,17 @@ function drawSeg(det) {
   tmp.height = maskH
   const tctx = tmp.getContext('2d')
   const imgData = tctx.createImageData(maskW, maskH)
-  // 提高不透明度，让分割效果更明显；mask 值通常是 0~1 的概率
+  const data = imgData.data
   const alphaScale = 0.75
-  for (let y = 0; y < maskH; y++) {
-    for (let x = 0; x < maskW; x++) {
-      const idx = (y * maskW + x) * 4
-      const alpha = Math.min(1, Math.max(0, mask[y][x])) * alphaScale
-      imgData.data[idx] = r
-      imgData.data[idx + 1] = g
-      imgData.data[idx + 2] = b
-      imgData.data[idx + 3] = Math.floor(alpha * 255)
-    }
+
+  // Float32Array 单层循环，无 uint8 量化，保留 float32 渐变
+  for (let i = 0; i < mask.length; i++) {
+    const alpha = Math.min(1, Math.max(0, mask[i])) * alphaScale
+    const di = i * 4
+    data[di]     = r
+    data[di + 1] = g
+    data[di + 2] = b
+    data[di + 3] = Math.floor(alpha * 255)
   }
   tctx.putImageData(imgData, 0, 0)
 

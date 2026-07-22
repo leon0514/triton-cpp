@@ -308,7 +308,14 @@ const filteredDetections = computed(() => {
 })
 
 const resultJson = computed(() => {
-  return JSON.stringify(result.value || {}, null, 2)
+  const raw = result.value
+  if (!raw) return ''
+  // 不显示 mask 数据（base64 太长且不可读），但保留 shape/offset/stats
+  const cleaned = {
+    ...raw,
+    detections: raw.detections?.map(({ mask, ...rest }) => rest),
+  }
+  return JSON.stringify(cleaned, null, 2)
 })
 
 const canRun = computed(() => selectedModel.value && imageFile.value)

@@ -20,11 +20,6 @@ output [
     name: "scores"
     data_type: TYPE_FP32
     dims: [2]
-  },
-  {
-    name: "transform_metadata"
-    data_type: TYPE_FP32
-    dims: [6]
   }
 ]
 
