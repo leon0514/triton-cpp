@@ -67,6 +67,7 @@ instance_group [
     gpus: [0]
   }
 ]
+parameters: { key: "mask_output_resolution" value: { string_value: "160" } }
 parameters: { key: "num_classes" value: { string_value: "80" } }
 parameters: { key: "num_masks" value: { string_value: "32" } }
 parameters: { key: "proto_height" value: { string_value: "160" } }

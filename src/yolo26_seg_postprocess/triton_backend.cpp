@@ -681,9 +681,8 @@ namespace yolo26_seg_postprocess_backend
             yolo26_seg_postprocess::Yolo26SegPostprocess *postprocessor = instance_state->postprocessor.get();
             const auto &config = postprocessor->config();
             const int max_detections = postprocessor->max_detections();
-            constexpr int kMaskOutputSize = 160;
-
-            // 1. 提取所有 request 信息
+            const int mask_output_resolution = config.mask_output_resolution;
+            const int slot_size = mask_output_resolution * mask_output_resolution;
             std::vector<RequestInfo> infos;
             infos.reserve(request_count);
 
@@ -965,7 +964,6 @@ namespace yolo26_seg_postprocess_backend
                 const int64_t boxes_shape[3] = {infos[i].batch_size, actual_num_dets, 4};
                 const int64_t scores_shape[2] = {infos[i].batch_size, actual_num_dets};
                 const int64_t classes_shape[2] = {infos[i].batch_size, actual_num_dets};
-                const int slot_size = kMaskOutputSize * kMaskOutputSize;
                 const int64_t detection_masks_shape[3] = {
                     infos[i].batch_size, actual_num_dets, slot_size};
                 const int64_t mask_shapes_shape[3] = {infos[i].batch_size, actual_num_dets, 2};
@@ -1065,10 +1063,10 @@ namespace yolo26_seg_postprocess_backend
                         info.classes_mem_type,
                         stream));
 
-                    const size_t mask_stride = static_cast<size_t>(kMaskOutputSize) * kMaskOutputSize * sizeof(float);
+                    const size_t mask_stride = static_cast<size_t>(mask_output_resolution) * mask_output_resolution * sizeof(float);
                     GUARDED_RETURN_IF_ERROR(CopyOutputStrided2D(
                         info.detection_masks_buffer,
-                        d_detection_masks + offset * max_detections * kMaskOutputSize * kMaskOutputSize,
+                        d_detection_masks + offset * max_detections * mask_output_resolution * mask_output_resolution,
                         actual_num_dets * mask_stride,
                         max_detections * mask_stride,
                         actual_num_dets * mask_stride,

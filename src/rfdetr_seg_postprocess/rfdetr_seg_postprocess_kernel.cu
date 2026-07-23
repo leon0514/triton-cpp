@@ -15,8 +15,6 @@
 namespace rfdetr_seg_postprocess
 {
 
-constexpr int kMaskOutputSize = 160;
-
 // RF-DETR ONNX 输出 labels 维度为 91：
 //   - dim 0 为背景/无目标槽位
 //   - dim 1..90 对应官方 COCO ID 1..90
@@ -232,11 +230,11 @@ __global__ void compute_masks_kernel(
     float input_height,
     int mask_height,
     int mask_width,
+    int mask_output_resolution,
     float *detection_masks,
     int *mask_offsets,
     int *mask_shapes)
 {
-    constexpr int MASK_SIZE = kMaskOutputSize;
     int b = blockIdx.y;
     int k = blockIdx.x;
 
@@ -247,10 +245,10 @@ __global__ void compute_masks_kernel(
 
     int nd = num_dets[b];
 
-    int out_idx = idx * MASK_SIZE * MASK_SIZE;
+    int out_idx = idx * mask_output_resolution * mask_output_resolution;
     mask_offsets[idx] = out_idx;
-    mask_shapes[idx * 2 + 0] = MASK_SIZE;
-    mask_shapes[idx * 2 + 1] = MASK_SIZE;
+    mask_shapes[idx * 2 + 0] = mask_output_resolution;
+    mask_shapes[idx * 2 + 1] = mask_output_resolution;
 
     if (k >= nd)
         return;
@@ -283,7 +281,7 @@ __global__ void compute_masks_kernel(
 
     if (m_x2 - m_x1 <= 0.0f || m_y2 - m_y1 <= 0.0f)
     {
-        for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
+        for (int tid = threadIdx.x; tid < mask_output_resolution * mask_output_resolution; tid += blockDim.x)
         {
             out[tid] = 0.0f;
         }
@@ -292,13 +290,13 @@ __global__ void compute_masks_kernel(
 
     const T *src = masks + ((b * num_queries + query_idx) * mask_height * mask_width);
 
-    for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
+    for (int tid = threadIdx.x; tid < mask_output_resolution * mask_output_resolution; tid += blockDim.x)
     {
-        int oy = tid / MASK_SIZE;
-        int ox = tid % MASK_SIZE;
+        int oy = tid / mask_output_resolution;
+        int ox = tid % mask_output_resolution;
 
-        float px = m_x1 + static_cast<float>(ox) * (m_x2 - m_x1) / static_cast<float>(MASK_SIZE);
-        float py = m_y1 + static_cast<float>(oy) * (m_y2 - m_y1) / static_cast<float>(MASK_SIZE);
+        float px = m_x1 + static_cast<float>(ox) * (m_x2 - m_x1) / static_cast<float>(mask_output_resolution);
+        float py = m_y1 + static_cast<float>(oy) * (m_y2 - m_y1) / static_cast<float>(mask_output_resolution);
 
         // —— 双线性插值 ——
         int mx0 = static_cast<int>(floorf(px));
@@ -355,6 +353,7 @@ void rfdetr_seg_postprocess_gpu(
     float input_height,
     int mask_height,
     int mask_width,
+    int mask_output_resolution,
     bool parse_masks,
     float conf_thresh,
     int max_detections,
@@ -441,8 +440,7 @@ void rfdetr_seg_postprocess_gpu(
     const int grid_out = (total_out + block - 1) / block;
     if (parse_masks && d_detection_masks != nullptr)
     {
-        constexpr int MASK_SIZE = kMaskOutputSize;
-        size_t mask_total = static_cast<size_t>(total_images) * max_detections * MASK_SIZE * MASK_SIZE;
+        size_t mask_total = static_cast<size_t>(total_images) * max_detections * mask_output_resolution * mask_output_resolution;
         checkRuntime(cudaMemsetAsync(d_detection_masks, 0, mask_total * sizeof(float), stream));
     }
     init_output_kernel<<<grid_out, block, 0, stream>>>(
@@ -470,7 +468,7 @@ void rfdetr_seg_postprocess_gpu(
                 d_boxes, d_num_dets, d_det_to_query_idx,
                 total_images, num_queries, max_detections,
                 input_width, input_height,
-                mask_height, mask_width,
+                mask_height, mask_width, mask_output_resolution,
                 d_detection_masks, d_mask_offsets, d_mask_shapes);
         }
         else
@@ -480,7 +478,7 @@ void rfdetr_seg_postprocess_gpu(
                 d_boxes, d_num_dets, d_det_to_query_idx,
                 total_images, num_queries, max_detections,
                 input_width, input_height,
-                mask_height, mask_width,
+                mask_height, mask_width, mask_output_resolution,
                 d_detection_masks, d_mask_offsets, d_mask_shapes);
         }
         checkRuntime(cudaPeekAtLastError());

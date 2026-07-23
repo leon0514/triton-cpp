@@ -15,8 +15,6 @@
 namespace yolo26_seg_postprocess
 {
 
-constexpr int kMaskOutputSize = 160;
-
 template <typename T>
 static __device__ __forceinline__ float read_input(
     const T *input, int idx)
@@ -212,13 +210,13 @@ __global__ void compute_and_crop_masks_kernel(
     int max_detections,
     int proto_h,
     int proto_w,
+    int mask_output_resolution,
     int input_width,
     int input_height,
     float *detection_masks,
     int *mask_offsets,
     int *mask_shapes)
 {
-    constexpr int MASK_SIZE = kMaskOutputSize;
     int b = blockIdx.y;
     int det = blockIdx.x;
 
@@ -226,10 +224,10 @@ __global__ void compute_and_crop_masks_kernel(
         return;
 
     int nd = num_dets[b];
-    int out_idx = b * max_detections * MASK_SIZE * MASK_SIZE + det * MASK_SIZE * MASK_SIZE;
+    int out_idx = b * max_detections * mask_output_resolution * mask_output_resolution + det * mask_output_resolution * mask_output_resolution;
     mask_offsets[b * max_detections + det] = out_idx;
-    mask_shapes[(b * max_detections + det) * 2 + 0] = MASK_SIZE;
-    mask_shapes[(b * max_detections + det) * 2 + 1] = MASK_SIZE;
+    mask_shapes[(b * max_detections + det) * 2 + 0] = mask_output_resolution;
+    mask_shapes[(b * max_detections + det) * 2 + 1] = mask_output_resolution;
 
     if (det >= nd)
         return;  // mask buffer 已由 cudaMemsetAsync 清零
@@ -265,7 +263,7 @@ __global__ void compute_and_crop_masks_kernel(
 
     if (x2p - x1p <= 0.0f || y2p - y1p <= 0.0f)
     {
-        for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
+        for (int tid = threadIdx.x; tid < mask_output_resolution * mask_output_resolution; tid += blockDim.x)
             dst[tid] = 0.0f;
         return;
     }
@@ -274,13 +272,13 @@ __global__ void compute_and_crop_masks_kernel(
     const T_PROTO *proto_b = protos + static_cast<size_t>(b) * num_masks * proto_h * proto_w;
     const int proto_stride = proto_h * proto_w;
 
-    for (int tid = threadIdx.x; tid < MASK_SIZE * MASK_SIZE; tid += blockDim.x)
+    for (int tid = threadIdx.x; tid < mask_output_resolution * mask_output_resolution; tid += blockDim.x)
     {
-        int oy = tid / MASK_SIZE;
-        int ox = tid % MASK_SIZE;
+        int oy = tid / mask_output_resolution;
+        int ox = tid % mask_output_resolution;
 
-        float px = x1p + static_cast<float>(ox) * (x2p - x1p) / static_cast<float>(MASK_SIZE);
-        float py = y1p + static_cast<float>(oy) * (y2p - y1p) / static_cast<float>(MASK_SIZE);
+        float px = x1p + static_cast<float>(ox) * (x2p - x1p) / static_cast<float>(mask_output_resolution);
+        float py = y1p + static_cast<float>(oy) * (y2p - y1p) / static_cast<float>(mask_output_resolution);
 
         // —— 双线性插值：计算 dot(w, proto) 在 4 个角点，再插值 ——
         int sx0 = static_cast<int>(floorf(px));
@@ -324,6 +322,7 @@ void yolo26_seg_compute_masks_gpu(
     int num_masks,
     int proto_h,
     int proto_w,
+    int mask_output_resolution,
     int input_width,
     int input_height,
     const int *d_num_dets,
@@ -347,7 +346,7 @@ void yolo26_seg_compute_masks_gpu(
             d_boxes,
             total_images, num_predictions, num_masks,
             max_detections,
-            proto_h, proto_w, input_width, input_height,
+            proto_h, proto_w, mask_output_resolution, input_width, input_height,
             d_detection_masks, d_mask_offsets, d_mask_shapes);
     }
     else
@@ -359,7 +358,7 @@ void yolo26_seg_compute_masks_gpu(
             d_boxes,
             total_images, num_predictions, num_masks,
             max_detections,
-            proto_h, proto_w, input_width, input_height,
+            proto_h, proto_w, mask_output_resolution, input_width, input_height,
             d_detection_masks, d_mask_offsets, d_mask_shapes);
     }
     checkRuntime(cudaPeekAtLastError());
@@ -395,6 +394,7 @@ void yolo26_seg_postprocess_gpu(
     int num_masks,
     int proto_h,
     int proto_w,
+    int mask_output_resolution,
     int input_width,
     int input_height,
     float conf_thresh,
@@ -467,8 +467,7 @@ void yolo26_seg_postprocess_gpu(
     const int grid_out = (total_out + block - 1) / block;
 
     // mask buffer 用硬件加速清零
-    constexpr int MASK_SIZE = kMaskOutputSize;
-    size_t mask_total = static_cast<size_t>(total_images) * max_detections * MASK_SIZE * MASK_SIZE;
+    size_t mask_total = static_cast<size_t>(total_images) * max_detections * mask_output_resolution * mask_output_resolution;
     checkRuntime(cudaMemsetAsync(d_detection_masks, 0, mask_total * sizeof(float), stream));
 
     init_output_kernel<<<grid_out, block, 0, stream>>>(

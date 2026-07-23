@@ -41,7 +41,7 @@ struct EnsembleConfig
     int num_keypoints = 17;
 
     // Seg 掩码输出尺寸（仅 seg 模式）
-    int mask_output_size = 160;
+    int mask_output_resolution = 160;
 
     // SAHI 切片配置
     int slice_width = 640;

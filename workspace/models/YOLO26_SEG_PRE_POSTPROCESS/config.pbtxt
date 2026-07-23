@@ -83,6 +83,10 @@ parameters: {
   value: { string_value: "160" }
 }
 parameters: {
+  key: "mask_output_resolution"
+  value: { string_value: "160" }
+}
+parameters: {
   key: "input_width"
   value: { string_value: "640" }
 }

@@ -14,9 +14,7 @@
 namespace rfdetr_seg_postprocess
 {
 
-    constexpr int kMaskOutputSize = 160;
-
-    RfDetrSegPostprocess::RfDetrSegPostprocess(const RfDetrSegPostprocessConfig &config)
+        RfDetrSegPostprocess::RfDetrSegPostprocess(const RfDetrSegPostprocessConfig &config)
         : config_(config)
     {
         const int max_batch = config_.max_batch_size;
@@ -49,7 +47,7 @@ namespace rfdetr_seg_postprocess
         det_to_query_idx_workspace_.gpu(max_batch * max_detections);
 
         // mask workspace 仅预分配一份固定槽位：每检测一个 slot = 160 * 160
-        detection_masks_workspace_.gpu(max_batch * max_detections * kMaskOutputSize * kMaskOutputSize);
+        detection_masks_workspace_.gpu(max_batch * max_detections * config_.mask_output_resolution * config_.mask_output_resolution);
         mask_offsets_workspace_.gpu(max_batch * max_detections);
         mask_shapes_workspace_.gpu(max_batch * max_detections * 2);
 
@@ -107,7 +105,7 @@ namespace rfdetr_seg_postprocess
         if (config_.return_masks)
         {
             d_detection_masks = detection_masks_workspace_.gpu(
-                total_images * config_.max_detections * kMaskOutputSize * kMaskOutputSize);
+                total_images * config_.max_detections * config_.mask_output_resolution * config_.mask_output_resolution);
         }
         int *d_mask_offsets = mask_offsets_workspace_.gpu(total_images * config_.max_detections);
         int *d_mask_shapes = mask_shapes_workspace_.gpu(total_images * config_.max_detections * 2);
@@ -144,6 +142,7 @@ namespace rfdetr_seg_postprocess
             config_.input_height,
             mask_height,
             mask_width,
+            config_.mask_output_resolution,
             config_.return_masks,
             config_.confidence_threshold,
             config_.max_detections,

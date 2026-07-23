@@ -410,7 +410,7 @@ parameters: {
 | `YOLO11_DET_PRE_POSTPROCESS` | `model_output` | `[84, 8400]` | `num_dets`, `detection_boxes[-1,4]`, `detection_scores[-1]`, `detection_classes[-1]` |
 | `YOLO11_OBB_PRE_POSTPROCESS` | `model_output` | `[20, 8400]` | 同上，但 `detection_boxes[-1,5]`（含 angle） |
 | `YOLO11_POSE_PRE_POSTPROCESS` | `model_output` | `[56, 8400]` | 同上 + `detection_keypoints[-1,17,3]` |
-| `YOLO11_SEG_PRE_POSTPROCESS` | `model_output`, `mask_protos` | `[116, 8400]`, `[32, 160, 160]` | 同上 + `detection_masks[-1]`, `mask_offsets[-1]`, `mask_shapes[-1,2]` |
+| `YOLO11_SEG_PRE_POSTPROCESS` | `model_output`, `mask_protos` | `[116, 8400]`, `[32, 160, 160]` | 同上 + `detection_masks[-1,-1]`, `mask_shapes[-1,2]` |
 | `YOLOV5_DET_PRE_POSTPROCESS` | `model_output` | `[25200, 85]` | 同 `YOLO11_DET_PRE_POSTPROCESS` |
 | `YOLO26_DET_PRE_POSTPROCESS` | `model_output` | `[300, 6]` | 同 `YOLO11_DET_PRE_POSTPROCESS` |
 | `YOLO26_OBB_PRE_POSTPROCESS` | `model_output` | `[300, X]` | 同 `YOLO11_OBB_PRE_POSTPROCESS` |
@@ -561,21 +561,20 @@ parameters: {
 output [
   ...
   { name: "detection_masks",   data_type: TYPE_FP32, dims: [300, 25600] },
-  { name: "mask_offsets",      data_type: TYPE_INT32, dims: [300] },
   { name: "mask_shapes",       data_type: TYPE_INT32, dims: [300, 2] }
 ]
 
 parameters: {
-  key: "output_type"       value: { string_value: "seg" }
+  key: "output_type"             value: { string_value: "seg" }
 }
 parameters: {
-  key: "detector_model"    value: { string_value: "YOLO11_SEG_PRE_ENSEMBLE" }
+  key: "detector_model"          value: { string_value: "YOLO11_SEG_PRE_ENSEMBLE" }
 }
 parameters: {
-  key: "mask_output_size"  value: { string_value: "160" }
+  key: "mask_output_resolution"  value: { string_value: "160" }
 }
 parameters: {
-  key: "num_classes"       value: { string_value: "80" }
+  key: "num_classes"             value: { string_value: "80" }
 }
 ```
 
@@ -612,7 +611,7 @@ parameters: {
 | `chunk_size` | int | `16` | 每次发给 detector 的最大切片数（batch size） |
 | `num_classes` | int | `80` | 类别数（pose 模式下通常为 `1`） |
 | `num_keypoints` | int | `17` | 关键点数（仅 pose 模式） |
-| `mask_output_size` | int | `160` | 分割 mask 输出尺寸（仅 seg 模式） |
+| `mask_output_resolution` | int | `160` | 分割 mask 输出边长（仅 seg 模式，输出为 N×N） |
 | `slice_width` | int | `640` | SAHI 切片宽度 |
 | `slice_height` | int | `640` | SAHI 切片高度 |
 | `overlap_width_ratio` | float | `0.2` | 切片水平重叠比例 |

@@ -48,7 +48,7 @@ parameters: {
   value: { string_value: "80" }
 }
 parameters: {
-  key: "mask_output_size"
+  key: "mask_output_resolution"
   value: { string_value: "160" }
 }
 parameters: {

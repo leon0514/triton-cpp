@@ -73,6 +73,10 @@ parameters: {
   value: { string_value: "100" }
 }
 parameters: {
+  key: "mask_output_resolution"
+  value: { string_value: "160" }
+}
+parameters: {
   key: "num_queries"
   value: { string_value: "100" }
 }

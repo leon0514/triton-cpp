@@ -122,6 +122,12 @@ TRITONSERVER_Error *ParseRfDetrSegPostprocessConfig(
             config.max_detections = std::stoi(max_dets);
         }
 
+        std::string mask_output_resolution = GetStringParameter(parameters, "mask_output_resolution");
+        if (!mask_output_resolution.empty())
+        {
+            config.mask_output_resolution = std::stoi(mask_output_resolution);
+        }
+
         std::string max_batch = GetStringParameter(parameters, "max_batch_size");
         if (!max_batch.empty())
         {

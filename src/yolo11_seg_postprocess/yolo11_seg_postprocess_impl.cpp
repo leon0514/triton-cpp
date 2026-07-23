@@ -11,9 +11,7 @@
 namespace yolo11_seg_postprocess
 {
 
-    constexpr int kMaskOutputSize = 160;
-
-    Yolo11SegPostprocess::Yolo11SegPostprocess(const Yolo11SegPostprocessConfig &config)
+        Yolo11SegPostprocess::Yolo11SegPostprocess(const Yolo11SegPostprocessConfig &config)
         : config_(config)
     {
         // 根据 max_batch_size 预分配 workspace，避免推理热路径上的同步显存申请。
@@ -30,7 +28,7 @@ namespace yolo11_seg_postprocess
         classes_workspace_.gpu(max_batch * config_.max_detections);
 
         size_t mask_pixels = static_cast<size_t>(max_batch) * config_.max_detections *
-                             kMaskOutputSize * kMaskOutputSize;
+                             config_.mask_output_resolution * config_.mask_output_resolution;
         detection_masks_workspace_.gpu(mask_pixels);
         mask_offsets_workspace_.gpu(max_batch * config_.max_detections);
         mask_shapes_workspace_.gpu(max_batch * config_.max_detections * 2);
@@ -79,7 +77,7 @@ namespace yolo11_seg_postprocess
         int *d_classes = classes_workspace_.gpu(total_images * config_.max_detections);
 
         size_t mask_pixels = static_cast<size_t>(total_images) * config_.max_detections *
-                             kMaskOutputSize * kMaskOutputSize;
+                             config_.mask_output_resolution * config_.mask_output_resolution;
         float *d_detection_masks = detection_masks_workspace_.gpu(mask_pixels);
         int *d_mask_offsets = mask_offsets_workspace_.gpu(total_images * config_.max_detections);
         int *d_mask_shapes = mask_shapes_workspace_.gpu(total_images * config_.max_detections * 2);
@@ -106,6 +104,7 @@ namespace yolo11_seg_postprocess
             config_.num_masks,
             config_.proto_height,
             config_.proto_width,
+            config_.mask_output_resolution,
             config_.input_width,
             config_.input_height,
             config_.anchors_first,
@@ -144,6 +143,7 @@ namespace yolo11_seg_postprocess
             config_.num_masks,
             config_.proto_height,
             config_.proto_width,
+            config_.mask_output_resolution,
             config_.input_width,
             config_.input_height,
             config_.anchors_first,

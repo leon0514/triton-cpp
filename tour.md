@@ -782,6 +782,66 @@ TRITONSERVER_Error *ParseConfig(
 
 Triton 的 `parameters` 只支持 `string_value`，所以即使参数是数字，也要写成 `"80"`，后端再用 `std::stoi`/`std::stof` 转换。
 
+### 7.4 config.pbtxt 中的 dims：何时用 `-1`、何时写具体值
+
+一个常见困惑：为什么有的 `dims` 写 `[-1]`，有的写 `[300, 4]`？规律如下：
+
+#### `-1`（动态维度）
+
+**仅在 `max_batch_size > 0` 时可用。** `-1` 表示"该维度长度在每次推理请求时可变"。Triton 会自动在 dims 前面追加 batch 维度。
+
+例如，`max_batch_size: 16`，声明 `dims: [-1, 4]`：
+
+```protobuf
+max_batch_size: 16
+output [
+  { name: "detection_boxes", dims: [-1, 4] }
+]
+```
+
+运行时，若某个请求通过 `num_dets` 告知实际检测到 5 个框，输出 shape 为 `[1, 5, 4]`；检测到 12 个框则为 `[1, 12, 4]`。
+
+典型使用场景：后处理输出，因为不同图片检测到的目标数量不同。
+
+#### 具体值（静态维度）
+
+以下情况必须写具体值：
+
+1. **`max_batch_size: 0`**（禁用动态 batching）：Triton 要求所有 dims 都是静态的。
+   ```protobuf
+   max_batch_size: 0
+   output [
+     { name: "detection_masks", dims: [300, 25600] }  # 必须写死
+   ]
+   ```
+   本项目中的 SAHI ensemble 就属于这种情况。
+
+2. **模型输入必须匹配 TensorRT plan**：TensorRT 引擎在构建时固定了 shape，config 中必须严格一致。
+   ```protobuf
+   input [
+     { name: "images", dims: [3, 640, 640] }   # 必须和 .plan 一致
+   ]
+   ```
+
+#### `-1` 在 `max_batch_size > 0` 下如何工作
+
+Triton 对 `max_batch_size > 0` 的模型做隐式 batch 拼接：config 中声明的 dims 是**单样本维度**，运行时 Triton 在前面追加 batch 维。
+
+| config 声明 | 运行时实际 shape（batch=4） |
+|---|---|
+| `dims: [3, 640, 640]` | `[4, 3, 640, 640]` |
+| `dims: [84, 8400]` | `[4, 84, 8400]` |
+| `dims: [-1, 4]` | `[4, N, 4]`（N 可变） |
+
+#### 总结
+
+| 条件 | dims 写法 |
+|---|---|
+| `max_batch_size > 0`，输出维度可变 | `[-1]`、`[-1, 4]` 等 |
+| `max_batch_size > 0`，输出维度固定 | 写具体值如 `[1]`、`[6]` |
+| `max_batch_size = 0` | 全部写具体值 |
+| 模型输入（TensorRT） | 必须和 .plan 一致 |
+
 ---
 
 ## 8. 实战：preprocess backend
@@ -1011,7 +1071,6 @@ outputs = [
     "detection_boxes",
     "detection_scores",
     "detection_classes",
-    "transform_metadata",
 ]
 
 # gRPC / HTTP

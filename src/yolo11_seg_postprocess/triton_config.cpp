@@ -84,6 +84,16 @@ TRITONSERVER_Error *ParseYolo11SegPostprocessConfig(
             config.proto_width = std::stoi(proto_width);
         }
 
+        std::string mask_output_resolution = GetStringParameter(parameters, "mask_output_resolution");
+        if (!mask_output_resolution.empty())
+        {
+            config.mask_output_resolution = std::stoi(mask_output_resolution);
+        }
+        else
+        {
+            config.mask_output_resolution = config.proto_height;  // 默认与 proto 尺寸一致
+        }
+
         std::string input_width = GetStringParameter(parameters, "input_width");
         if (!input_width.empty())
         {

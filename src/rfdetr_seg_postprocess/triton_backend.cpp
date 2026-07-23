@@ -710,7 +710,8 @@ TRITONBACKEND_ModelInstanceExecute(
     rfdetr_seg_postprocess::RfDetrSegPostprocess *postprocessor = instance_state->postprocessor.get();
     const auto &config = postprocessor->config();
     const int max_detections = postprocessor->max_detections();
-    constexpr int kMaskOutputSize = 160;
+    const int mask_output_resolution = config.mask_output_resolution;
+    const int slot_size = mask_output_resolution * mask_output_resolution;
 
     std::vector<RequestInfo> infos;
     infos.reserve(request_count);
@@ -978,8 +979,6 @@ TRITONBACKEND_ModelInstanceExecute(
             TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(num_dets_err)));
         return nullptr;
     }
-
-    const int slot_size = kMaskOutputSize * kMaskOutputSize;
 
     for (int i = 0; i < request_num; ++i)
     {

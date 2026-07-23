@@ -53,6 +53,7 @@ void rfdetr_seg_postprocess_gpu(
     float input_height,
     int mask_height,
     int mask_width,
+    int mask_output_resolution,
     bool parse_masks,
     float conf_thresh,
     int max_detections,

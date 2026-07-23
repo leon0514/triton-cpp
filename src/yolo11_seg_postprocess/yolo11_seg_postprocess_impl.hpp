@@ -25,6 +25,7 @@ namespace yolo11_seg_postprocess
         int num_masks = 32;
         int proto_height = 160;
         int proto_width = 160;
+        int mask_output_resolution = 160;  // 输出 mask 的宽高（正方形）
         int input_width = 640;
         int input_height = 640;
         float confidence_threshold = 0.25f;

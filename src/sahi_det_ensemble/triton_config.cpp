@@ -98,9 +98,9 @@ TRITONSERVER_Error *ParseEnsembleConfig(
         if (!num_kpts.empty())
             config.num_keypoints = std::stoi(num_kpts);
 
-        std::string mask_sz = GetStringParameter(parameters, "mask_output_size");
+        std::string mask_sz = GetStringParameter(parameters, "mask_output_resolution");
         if (!mask_sz.empty())
-            config.mask_output_size = std::stoi(mask_sz);
+            config.mask_output_resolution = std::stoi(mask_sz);
 
         // SAHI 切片参数
         std::string sw = GetStringParameter(parameters, "slice_width");
@@ -134,6 +134,34 @@ TRITONSERVER_Error *ParseEnsembleConfig(
             RETURN_TRITON_ERROR(INVALID_ARG, "num_classes must be > 0");
         if (config.chunk_size <= 0)
             RETURN_TRITON_ERROR(INVALID_ARG, "chunk_size must be > 0");
+
+        // 校验 seg 模式 detection_masks 输出 dims 与 mask_output_resolution 一致
+        if (config.output_type == OutputType::SEG)
+        {
+            const auto &outputs = model_config.value("output", nlohmann::json::array());
+            for (const auto &o : outputs)
+            {
+                if (o.value("name", "") == "detection_masks")
+                {
+                    const auto &dims = o.value("dims", nlohmann::json::array());
+                    if (dims.size() >= 2)
+                    {
+                        int config_dim = dims[1].get<int>();
+                        int expected = config.max_detections * config.mask_output_resolution * config.mask_output_resolution;
+                        if (config_dim != expected)
+                        {
+                            char buf[256];
+                            snprintf(buf, sizeof(buf),
+                                "detection_masks dims[1] mismatch: config has %d, "
+                                "expected max_detections(%d) × mask_output_resolution(%d)² = %d",
+                                config_dim, config.max_detections, config.mask_output_resolution, expected);
+                            RETURN_TRITON_ERROR(INVALID_ARG, buf);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
     }
     catch (const std::exception &e)
     {

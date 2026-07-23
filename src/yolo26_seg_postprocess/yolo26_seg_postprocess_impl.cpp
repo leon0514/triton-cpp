@@ -11,9 +11,7 @@
 namespace yolo26_seg_postprocess
 {
 
-    constexpr int kMaskOutputSize = 160;
-
-    Yolo26SegPostprocess::Yolo26SegPostprocess(const Yolo26SegPostprocessConfig &config)
+        Yolo26SegPostprocess::Yolo26SegPostprocess(const Yolo26SegPostprocessConfig &config)
         : config_(config)
     {
         const int max_batch = config_.max_batch_size;
@@ -30,7 +28,7 @@ namespace yolo26_seg_postprocess
         classes_workspace_.gpu(max_batch * config_.max_detections);
 
         size_t mask_pixels = static_cast<size_t>(max_batch) * config_.max_detections *
-                             kMaskOutputSize * kMaskOutputSize;
+                             config_.mask_output_resolution * config_.mask_output_resolution;
         detection_masks_workspace_.gpu(mask_pixels);
         mask_offsets_workspace_.gpu(max_batch * config_.max_detections);
         mask_shapes_workspace_.gpu(max_batch * config_.max_detections * 2);
@@ -82,7 +80,7 @@ namespace yolo26_seg_postprocess
         int *d_classes = classes_workspace_.gpu(total_images * config_.max_detections);
 
         size_t mask_pixels = static_cast<size_t>(total_images) * config_.max_detections *
-                             kMaskOutputSize * kMaskOutputSize;
+                             config_.mask_output_resolution * config_.mask_output_resolution;
         float *d_detection_masks = detection_masks_workspace_.gpu(mask_pixels);
         int *d_mask_offsets = mask_offsets_workspace_.gpu(total_images * config_.max_detections);
         int *d_mask_shapes = mask_shapes_workspace_.gpu(total_images * config_.max_detections * 2);
@@ -127,6 +125,7 @@ namespace yolo26_seg_postprocess
             config_.num_masks,
             config_.proto_height,
             config_.proto_width,
+            config_.mask_output_resolution,
             config_.input_width,
             config_.input_height,
             config_.confidence_threshold,
@@ -159,6 +158,7 @@ namespace yolo26_seg_postprocess
             config_.num_masks,
             config_.proto_height,
             config_.proto_width,
+            config_.mask_output_resolution,
             config_.input_width,
             config_.input_height,
             d_num_dets,

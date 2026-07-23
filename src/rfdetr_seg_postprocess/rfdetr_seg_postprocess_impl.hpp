@@ -27,6 +27,7 @@ struct RfDetrSegPostprocessConfig
     float input_width          = 384.0f;
     float input_height         = 384.0f;
     bool return_masks          = true;
+    int mask_output_resolution       = 160;  // 输出 mask 的宽高（正方形）
     std::vector<int> skip_coco_ids = {12, 26, 29, 30, 45, 66, 68, 69, 71, 83};
 };
 

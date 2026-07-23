@@ -50,8 +50,7 @@ static_assert(sizeof(Candidate) == 32, "Candidate must stay 32-byte aligned");
  * @param num_classes           类别数（如 80）
  * @param num_masks             mask 系数数量（如 32）
  * @param proto_h               prototype mask 高度（如 160）
- * @param proto_w               prototype mask 宽度（如 160）
- * @param input_width           模型输入宽度（用于把检测框映射到 proto 分辨率）
+ * @param proto_w               prototype mask 宽度（如 160） * @param mask_output_resolution      输出 mask 尺寸（正方形，如 160） * @param input_width           模型输入宽度（用于把检测框映射到 proto 分辨率）
  * @param input_height          模型输入高度
  * @param anchors_first         true 表示 output0 排布为 [batch, anchors, channels]
  * @param apply_sigmoid         是否对 class score 再应用一次 sigmoid（模型已做则填 false）
@@ -99,6 +98,7 @@ void yolo11_seg_postprocess_gpu(
     int num_masks,
     int proto_h,
     int proto_w,
+    int mask_output_resolution,
     int input_width,
     int input_height,
     bool anchors_first,
@@ -146,6 +146,7 @@ void yolo11_seg_compute_masks_gpu(
     int num_masks,
     int proto_h,
     int proto_w,
+    int mask_output_resolution,
     int input_width,
     int input_height,
     bool anchors_first,

@@ -224,11 +224,10 @@ async def infer(
         if "pose" in model_name_lower:
             output_names.append("detection_keypoints")
 
-        # Segmentation models have mask outputs
+        # Segmentation models have mask outputs (mask_offsets removed, masks now [N, slot] format)
         if "seg" in model_name_lower:
             output_names.extend([
                 "detection_masks",
-                "mask_offsets",
                 "mask_shapes",
             ])
 
