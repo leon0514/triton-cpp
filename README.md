@@ -82,6 +82,7 @@ cp build/libtriton_yolo26_obb_postprocess.so workspace/models/YOLO26_OBB_PRE_POS
 cp build/libtriton_yolo26_seg_postprocess.so workspace/models/YOLO26_SEG_PRE_POSTPROCESS/1/
 cp build/libtriton_rfdetr_postprocess.so workspace/models/RFDETR_DET_PRE_POSTPROCESS/1/
 cp build/libtriton_rfdetr_seg_postprocess.so workspace/models/RFDETR_SEG_PRE_POSTPROCESS/1/
+cp build/libtriton_sahi_preprocess.so workspace/models/SAHI_PREPROCESS/1
 cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO11_DET_ENSEMBLE/1/
 cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO11_POSE_ENSEMBLE/1/
 cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO11_SEG_ENSEMBLE/1/

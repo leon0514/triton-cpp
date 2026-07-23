@@ -7,6 +7,7 @@
 #include "common/map_boxes.hpp"
 #include "yolo26_pose_postprocess/triton_config.hpp"
 #include "common/check.hpp"
+#include "common/logging.hpp"
 #include <cstdio>
 
 namespace yolo26_pose_postprocess
@@ -115,7 +116,7 @@ void Yolo26PosePostprocess::forward(
                               ? cub_sort_temp_storage_workspace_.gpu()
                               : nullptr;
 
-    fprintf(stderr, "[yolo26_pose_postprocess] num_keypoints=%d keypoint_dim=%d "
+    LOG_INFO("[yolo26_pose_postprocess] num_keypoints=%d keypoint_dim=%d "
             "conf_thresh=%f max_detections=%d\n",
             config_.num_keypoints, config_.keypoint_dim,
             config_.confidence_threshold, config_.max_detections);

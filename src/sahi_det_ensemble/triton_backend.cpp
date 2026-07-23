@@ -18,6 +18,7 @@
 #include "sahi_det_ensemble/sahi_det_ensemble_kernel.hpp"
 #include "sahi_det_ensemble/triton_config.hpp"
 #include "common/device.hpp"
+#include "common/logging.hpp"
 #include "common/memory.hpp"
 
 #include <triton/core/tritonbackend.h>
@@ -653,7 +654,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                 std::string shape_str = "[";
                 for (size_t xi = 0; xi < nd_sh.size(); ++xi) { if (xi) shape_str += ","; shape_str += std::to_string(nd_sh[xi]); }
                 shape_str += "]";
-                printf("[SAHI_DEBUG] chunk s=%d n=%d actual_num_dets=%d nd_sh=%s bx_sh_sz=%zu kp_sh_sz=%zu\n",
+                LOG_VERBOSE("[SAHI_DEBUG] chunk s=%d n=%d actual_num_dets=%d nd_sh=%s bx_sh_sz=%zu kp_sh_sz=%zu",
                        s, n, actual_num_dets, shape_str.c_str(), bx_sh.size(), kp_sh.size());
             }
 
@@ -748,9 +749,9 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
             std::vector<int> h_det_num(slice_num);
             cudaMemcpy(h_det_num.data(), is->det_num_dets_.gpu(),
                        slice_num * sizeof(int), cudaMemcpyDeviceToHost);
-            printf("[SAHI_DEBUG] slice_num=%d h_n(filtered)=%d\n", slice_num, h_n);
+            LOG_VERBOSE("[SAHI_DEBUG] slice_num=%d h_n(filtered)=%d", slice_num, h_n);
             for (int si = 0; si < slice_num; ++si)
-                printf("  slice[%d]: num_dets=%d\n", si, h_det_num[si]);
+                LOG_VERBOSE("  slice[%d]: num_dets=%d", si, h_det_num[si]);
         }
 
         // ---- 2f. 逐类 NMS（仅在有有效框时运行，传入精准的 h_n） ----
@@ -769,7 +770,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
             cudaMemcpyAsync(&h_nms, is->nms_kept_.gpu(), sizeof(int),
                             cudaMemcpyDeviceToHost, stream);
             cudaStreamSynchronize(stream);
-            printf("[SAHI_DEBUG] h_nms(after NMS)=%d num_classes=%d\n", h_nms, cfg.num_classes);
+            LOG_VERBOSE("[SAHI_DEBUG] h_nms(after NMS)=%d num_classes=%d", h_nms, cfg.num_classes);
         }
 
         // ---- 2g. 批量 GPU→CPU 拷贝（仅拷贝有效区间，节省带宽） ----
@@ -853,7 +854,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
 
         // ---- DEBUG: 打印最终检测的切片分布 ----
         {
-            printf("[SAHI_DEBUG] final_n=%d\n", final_n);
+            LOG_VERBOSE("[SAHI_DEBUG] final_n=%d", final_n);
             std::vector<int> slice_dist(slice_num, 0);
             for (int i = 0; i < final_n; ++i) {
                 int fi = h_keep[scored[i].second];
@@ -862,7 +863,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                 if (si >= 0 && si < slice_num) slice_dist[si]++;
             }
             for (int si = 0; si < slice_num; ++si)
-                printf("  final slice[%d]: %d dets\n", si, slice_dist[si]);
+                LOG_VERBOSE("  final slice[%d]: %d dets", si, slice_dist[si]);
         }
 
         const int64_t ns[1] = {1}, bs[2] = {cfg.max_detections, static_cast<int64_t>(cfg.box_dim)},

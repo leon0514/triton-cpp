@@ -5,6 +5,7 @@
 
 #include "rfdetr_postprocess/rfdetr_postprocess_impl.hpp"
 #include "common/check.hpp"
+#include "common/logging.hpp"
 #include "common/map_boxes.hpp"
 
 #include <algorithm>
@@ -117,7 +118,7 @@ void RfDetrPostprocess::forward(
                                 cudaMemcpyHostToDevice));
     }
 
-    fprintf(stderr, "[rfdetr_postprocess] conf_thresh=%f input_size=%.0fx%.0f max_detections=%d\n",
+    LOG_INFO("[rfdetr_postprocess] conf_thresh=%f input_size=%.0fx%.0f max_detections=%d",
             config_.confidence_threshold, config_.input_width, config_.input_height, config_.max_detections);
     fflush(stderr);
 

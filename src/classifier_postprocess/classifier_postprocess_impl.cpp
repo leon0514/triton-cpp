@@ -4,6 +4,7 @@
  */
 
 #include "classifier_postprocess/classifier_postprocess_impl.hpp"
+#include "common/logging.hpp"
 #include <cstdio>
 
 namespace classifier_postprocess
@@ -70,7 +71,7 @@ void ClassifierPostprocess::forward(
                               ? cub_temp_storage_workspace_.gpu()
                               : nullptr;
 
-    fprintf(stderr,
+    LOG_INFO(
             "[classifier_postprocess] num_classes=%d top_k=%d apply_softmax=%d\n",
             num_classes, top_k, (int)config_.apply_softmax);
     fflush(stderr);

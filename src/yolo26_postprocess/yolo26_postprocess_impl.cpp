@@ -5,6 +5,7 @@
 
 #include "yolo26_postprocess/yolo26_postprocess_impl.hpp"
 #include "common/check.hpp"
+#include "common/logging.hpp"
 #include "common/map_boxes.hpp"
 #include <cstdio>
 
@@ -105,7 +106,7 @@ void Yolo26Postprocess::forward(
                               ? cub_sort_temp_storage_workspace_.gpu()
                               : nullptr;
 
-    fprintf(stderr, "[yolo26_postprocess] conf_thresh=%f max_detections=%d\n",
+    LOG_INFO("[yolo26_postprocess] conf_thresh=%f max_detections=%d",
             config_.confidence_threshold, config_.max_detections);
     fflush(stderr);
 

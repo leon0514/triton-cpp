@@ -128,14 +128,14 @@ TRITONSERVER_Error *ParseEnsembleConfig(
                     if (dims.size() >= 2)
                     {
                         int config_dim = dims[1].get<int>();
-                        int expected = config.max_detections * config.mask_output_resolution * config.mask_output_resolution;
-                        if (config_dim != expected)
+                        int slot_pixels = config.mask_output_resolution * config.mask_output_resolution;
+                        if (config_dim != slot_pixels)
                         {
                             char buf[256];
                             snprintf(buf, sizeof(buf),
                                 "detection_masks dims[1] mismatch: config has %d, "
-                                "expected max_detections(%d) × mask_output_resolution(%d)² = %d",
-                                config_dim, config.max_detections, config.mask_output_resolution, expected);
+                                "expected mask_output_resolution(%d)² = %d",
+                                config_dim, config.mask_output_resolution, slot_pixels);
                             RETURN_TRITON_ERROR(INVALID_ARG, buf);
                         }
                     }
