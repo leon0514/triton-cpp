@@ -4,7 +4,7 @@
  */
 
 #include "yolo11_obb_postprocess/yolo11_obb_postprocess_kernel.hpp"
-#include "rotated_iou.cuh"
+#include "common/iou.cuh"
 #include "common/check.hpp"
 
 #include <cuda_runtime.h>
@@ -249,7 +249,7 @@ __global__ void nms_kernel(
                 if (cj.score < 0.0f || cj.class_id != ci.class_id)
                     continue;
 
-                float iou = rotated_iou(
+                float iou = common_iou::box_probiou(
                     ci.cx, ci.cy, ci.w, ci.h, ci.angle,
                     cj.cx, cj.cy, cj.w, cj.h, cj.angle);
                 if (iou > iou_thresh)

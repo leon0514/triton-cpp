@@ -4,6 +4,7 @@
  */
 
 #include "yolo11_postprocess/yolo11_postprocess_kernel.hpp"
+#include "common/iou.cuh"
 #include "common/check.hpp"
 
 #include <cuda_runtime.h>
@@ -14,26 +15,6 @@
 
 namespace yolo11_postprocess
 {
-
-static __device__ __forceinline__ float iou(
-    float x1, float y1, float x2, float y2,
-    float x1_, float y1_, float x2_, float y2_)
-{
-    float ix1 = fmaxf(x1, x1_);
-    float iy1 = fmaxf(y1, y1_);
-    float ix2 = fminf(x2, x2_);
-    float iy2 = fminf(y2, y2_);
-
-    float inter_w = fmaxf(0.0f, ix2 - ix1);
-    float inter_h = fmaxf(0.0f, iy2 - iy1);
-    float inter   = inter_w * inter_h;
-
-    float area1 = (x2 - x1) * (y2 - y1);
-    float area2 = (x2_ - x1_) * (y2_ - y1_);
-    float uni   = area1 + area2 - inter + 1e-6f;
-
-    return inter / uni;
-}
 
 template <typename T>
 static __device__ __forceinline__ float read_input(
@@ -183,7 +164,7 @@ __global__ void nms_kernel(
             if (classes_b[j] != c.class_id)
                 continue;
 
-            float iou_val = iou(
+            float iou_val = common_iou::box_iou(
                 c.x1, c.y1, c.x2, c.y2,
                 boxes_b[j * 4 + 0],
                 boxes_b[j * 4 + 1],
