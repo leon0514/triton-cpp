@@ -13,11 +13,11 @@ namespace sahi_det_ensemble_backend
 {
 
 // SAHI + Detection Ensemble 配置
-enum class OutputType { DET, POSE, SEG };
+enum class OutputType { DET, POSE, SEG, OBB };
 
 struct EnsembleConfig
 {
-    // 输出类型：det | pose | seg
+    // 输出类型：det | pose | seg | obb
     OutputType output_type = OutputType::DET;
 
     // 检测模型名称（ensemble 模型，包含 preprocess + inference + postprocess）
@@ -27,6 +27,9 @@ struct EnsembleConfig
     float confidence_threshold = 0.25f;
     float iou_threshold = 0.45f;
     int max_detections = 300;
+
+    // Box 维度：4 = AABB (x1,y1,x2,y2)，5 = OBB (cx,cy,w,h,angle)
+    int box_dim = 4;
 
     // 分块批量大小（一次给 detector 发送的最大切片数）
     int chunk_size = 16;

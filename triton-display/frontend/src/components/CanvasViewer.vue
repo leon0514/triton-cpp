@@ -76,9 +76,6 @@ async function draw() {
 }
 
 function drawDetection(det) {
-  const name = props.classNames[det.class_id]
-  if (!name || name.trim() === '') return
-
   if (props.modelType === 'obb') {
     drawOBB(det)
   } else {

@@ -250,7 +250,7 @@ function closeModelSelect() {
 }
 
 function getLabelName(classId) {
-  return classNames.value[classId] || ''
+  return classNames.value[classId] || `class_${classId}`
 }
 
 const modelType = computed(() => {
@@ -266,10 +266,6 @@ const availableLabels = computed(() => {
   const ids = new Set(result.value?.detections?.map((d) => d.class_id) || [])
   return Array.from(ids)
     .sort((a, b) => a - b)
-    .filter((id) => {
-      const name = getLabelName(id)
-      return name && name.trim() !== ''
-    })
     .map((id) => ({
       id,
       name: getLabelName(id),
@@ -300,8 +296,6 @@ const filteredDetections = computed(() => {
   if (!result.value?.detections) return []
   return result.value.detections.filter((d) => {
     if (d.score < confThreshold.value) return false
-    const name = getLabelName(d.class_id)
-    if (!name || name.trim() === '') return false
     if (!selectedLabels.value.includes(d.class_id)) return false
     return true
   })

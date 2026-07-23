@@ -296,11 +296,11 @@ struct InstanceState {
         int max_total = max_slices * max_dets;
 
         det_num_dets_.gpu(max_slices);
-        det_boxes_.gpu(max_slices * max_dets * 4);
+        det_boxes_.gpu(max_slices * max_dets * cfg.box_dim);
         det_scores_.gpu(max_slices * max_dets);
         det_classes_.gpu(max_slices * max_dets);
 
-        filtered_boxes_.gpu(max_total * 4);
+        filtered_boxes_.gpu(max_total * cfg.box_dim);
         filtered_scores_.gpu(max_total);
         filtered_classes_.gpu(max_total);
         filtered_slice_idx_.gpu(max_total);
@@ -674,11 +674,11 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                             std::min(nd_sz, static_cast<size_t>(n) * sizeof(int)),
                             cudaMemcpyDeviceToDevice, stream);
 
-            // boxes: [n, actual_num_dets, 4] → strided copy to [n, max_dets, 4]
+            // boxes: [n, actual_num_dets, box_dim] → strided copy to [n, max_dets, box_dim]
             sahi_det_ensemble::strided_copy_boxes(
                 static_cast<const float *>(bx_b),
-                is->det_boxes_.gpu() + s * cfg.max_detections * 4,
-                n, actual_num_dets * 4, cfg.max_detections * 4, stream);
+                is->det_boxes_.gpu() + s * cfg.max_detections * cfg.box_dim,
+                n, actual_num_dets * cfg.box_dim, cfg.max_detections * cfg.box_dim, stream);
 
             // scores: [n, actual_num_dets] → strided copy to [n, max_dets]
             sahi_det_ensemble::strided_copy_scores(
@@ -701,6 +701,8 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                     is->kpt_workspace_.gpu() + s * kpt_dst_stride,
                     n, kpt_src_stride, kpt_dst_stride, stream);
             }
+
+            // obb: [n, actual_num_dets, 5] → [n, max_dets, 5] 已由上方 strided_copy_boxes 统一处理
 
             // masks (seg): [n, actual_num_dets * 160 * 160] → per-chunk workspace
             if (cfg.output_type == OutputType::SEG && mask_b) {
@@ -750,7 +752,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
             is->det_num_dets_.gpu(), is->det_boxes_.gpu(),
             is->det_scores_.gpu(), is->det_classes_.gpu(),
             is->slice_offsets_.gpu(),
-            slice_num, cfg.max_detections,
+            slice_num, cfg.max_detections, cfg.box_dim,
             cfg.confidence_threshold, info.W, info.H,
             is->filtered_boxes_.gpu(), is->filtered_scores_.gpu(),
             is->filtered_classes_.gpu(), is->filtered_slice_idx_.gpu(),
@@ -779,7 +781,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                 is->filtered_boxes_.gpu(), is->filtered_scores_.gpu(),
                 is->filtered_classes_.gpu(),
                 h_n,  // 【修改 2】恢复传入精准的 h_n，防止 GPU 越界
-                cfg.iou_threshold, cfg.num_classes,
+                cfg.iou_threshold, cfg.num_classes, cfg.box_dim,
                 is->nms_keep_.gpu(), is->nms_kept_.gpu(),
                 is->nms_offsets_.gpu(), is->nms_counters_.gpu(),
                 is->nms_flags_.gpu(), stream);
@@ -793,7 +795,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
 
         // ---- 2g. 批量 GPU→CPU 拷贝（仅拷贝有效区间，节省带宽） ----
         std::vector<int> h_keep(h_nms);
-        std::vector<float> h_fb(h_n * 4), h_fs(h_n);
+        std::vector<float> h_fb(h_n * cfg.box_dim), h_fs(h_n);
         std::vector<int> h_fc(h_n);
         // 读取 filtered_slice_idx_（存储 flat index tid，可还原 si/di）用于 pose/seg 数据索引
         std::vector<int> h_tid(h_n);
@@ -803,7 +805,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
             cudaMemcpyAsync(h_keep.data(), is->nms_keep_.gpu(),
                             h_nms * sizeof(int), cudaMemcpyDeviceToHost, stream);
             cudaMemcpyAsync(h_fb.data(), is->filtered_boxes_.gpu(),
-                            h_n * 4 * sizeof(float), cudaMemcpyDeviceToHost, stream);
+                            h_n * cfg.box_dim * sizeof(float), cudaMemcpyDeviceToHost, stream);
             cudaMemcpyAsync(h_fs.data(), is->filtered_scores_.gpu(),
                             h_n * sizeof(float), cudaMemcpyDeviceToHost, stream);
             cudaMemcpyAsync(h_fc.data(), is->filtered_classes_.gpu(),
@@ -828,14 +830,14 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
         };
 
         if (h_nms == 0) {
-            const int64_t ns[1] = {1}, bs[2] = {cfg.max_detections, 4},
+            const int64_t ns[1] = {1}, bs[2] = {cfg.max_detections, static_cast<int64_t>(cfg.box_dim)},
                           ss[1] = {cfg.max_detections}, cs[1] = {cfg.max_detections};
             int32_t zero = 0; void *nb = nullptr;
             alloc_output("num_dets", TRITONSERVER_TYPE_INT32, ns, 1, 4, &nb);
             if (nb) memcpy(nb, &zero, 4);
             void *bb = nullptr; alloc_output("detection_boxes", TRITONSERVER_TYPE_FP32,
-                bs, 2, cfg.max_detections * 4 * sizeof(float), &bb);
-            if (bb) memset(bb, 0, cfg.max_detections * 4 * sizeof(float));
+                bs, 2, cfg.max_detections * cfg.box_dim * sizeof(float), &bb);
+            if (bb) memset(bb, 0, cfg.max_detections * cfg.box_dim * sizeof(float));
             void *sb = nullptr; alloc_output("detection_scores", TRITONSERVER_TYPE_FP32,
                 ss, 1, cfg.max_detections * sizeof(float), &sb);
             if (sb) memset(sb, 0, cfg.max_detections * sizeof(float));
@@ -888,7 +890,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                 printf("  final slice[%d]: %d dets\n", si, slice_dist[si]);
         }
 
-        const int64_t ns[1] = {1}, bs[2] = {cfg.max_detections, 4},
+        const int64_t ns[1] = {1}, bs[2] = {cfg.max_detections, static_cast<int64_t>(cfg.box_dim)},
                       ss[1] = {cfg.max_detections}, cs[1] = {cfg.max_detections};
 
         int32_t nd_val = final_n; void *nb = nullptr;
@@ -897,7 +899,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
 
         void *bb = nullptr;
         alloc_output("detection_boxes", TRITONSERVER_TYPE_FP32,
-                     bs, 2, cfg.max_detections * 4 * sizeof(float), &bb);
+                     bs, 2, cfg.max_detections * cfg.box_dim * sizeof(float), &bb);
         void *sb = nullptr;
         alloc_output("detection_scores", TRITONSERVER_TYPE_FP32,
                      ss, 1, cfg.max_detections * sizeof(float), &sb);
@@ -905,23 +907,16 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
         alloc_output("detection_classes", TRITONSERVER_TYPE_INT32,
                      cs, 1, cfg.max_detections * sizeof(int32_t), &cb);
 
-        // Pose/seg 附加输出
-        void *kpt_b = nullptr;
-        if (cfg.output_type == OutputType::POSE) {
-            const int64_t kpt_shape[3] = {cfg.max_detections, cfg.num_keypoints, 3};
-            alloc_output("detection_keypoints", TRITONSERVER_TYPE_FP32, kpt_shape, 3,
-                cfg.max_detections * cfg.num_keypoints * 3 * sizeof(float), &kpt_b);
-        }
+        // Pose/seg 附加输出（由下方 fill 段内部分配并填充）
+        // 注意：不要在此外再次 alloc_output("detection_keypoints")，否则 Triton 会生成两份重名输出
 
         if (bb) {
             float *fb = static_cast<float *>(bb);
-            memset(fb, 0, cfg.max_detections * 4 * sizeof(float));
+            memset(fb, 0, cfg.max_detections * cfg.box_dim * sizeof(float));
             for (int i = 0; i < final_n; ++i) {
                 int si = h_keep[scored[i].second];
-                fb[i * 4 + 0] = h_fb[si * 4 + 0];
-                fb[i * 4 + 1] = h_fb[si * 4 + 1];
-                fb[i * 4 + 2] = h_fb[si * 4 + 2];
-                fb[i * 4 + 3] = h_fb[si * 4 + 3];
+                for (int d = 0; d < cfg.box_dim; ++d)
+                    fb[i * cfg.box_dim + d] = h_fb[si * cfg.box_dim + d];
             }
         }
         if (sb) {

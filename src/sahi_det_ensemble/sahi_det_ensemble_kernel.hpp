@@ -16,30 +16,30 @@ namespace sahi_det_ensemble
  * 输入来自 detector 输出 [num_slices, max_dets, ...]，直接处理并压缩。
  *
  * det_num_dets: [num_slices] 每张切片的检测数
- * det_boxes:     [num_slices, max_dets, 4]
+ * det_boxes:     [num_slices, max_dets, box_dim]  (4=AABB, 5=OBB)
  * det_scores:    [num_slices, max_dets]
  * det_classes:   [num_slices, max_dets]
  * slice_offsets: [num_slices, 4] [ox, oy, w, h]
+ * box_dim:       4=AABB (x1,y1,x2,y2), 5=OBB (cx,cy,w,h,angle)
  *
- * 输出压缩后的有效检测（已偏移+裁剪+过滤）。
+ * 输出压缩后的有效检测，统一为 AABB 4 维供 NMS 使用。
  */
 void filter_and_offset(
     const int *det_num_dets, const float *det_boxes,
     const float *det_scores, const int *det_classes,
     const int *slice_offsets,
-    int num_slices, int max_dets,
+    int num_slices, int max_dets, int box_dim,
     float conf_threshold, int img_w, int img_h,
     float *out_boxes, float *out_scores, int *out_classes,
     int *out_slice_idx, int *d_out_count,
     int max_output, cudaStream_t stream);
 
 /**
- * @brief 逐类 NMS（GPU 版）。
- * 输入已按分数从高到低排列。
+ * @brief 逐类 NMS（GPU 版），支持 AABB (box_dim=4) 与 OBB rotated IoU (box_dim=5)。
  */
 void nms_per_class(
     const float *boxes, const float *scores, const int *classes,
-    int N, float iou_threshold, int num_classes,
+    int N, float iou_threshold, int num_classes, int box_dim,
     int *keep, int *d_num_kept,
     int *d_class_offsets, int *d_counters,
     int *d_flags, cudaStream_t stream);

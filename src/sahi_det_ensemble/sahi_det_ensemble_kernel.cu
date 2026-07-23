@@ -26,7 +26,7 @@ static __global__ void filter_offset_kernel(
     const float *__restrict__ det_scores,
     const int *__restrict__ det_classes,
     const int *__restrict__ slice_offsets,
-    int num_slices, int max_dets,
+    int num_slices, int max_dets, int box_dim,
     float conf_threshold, int img_w, int img_h,
     float *__restrict__ out_boxes,
     float *__restrict__ out_scores,
@@ -35,44 +35,72 @@ static __global__ void filter_offset_kernel(
     int *__restrict__ d_out_count,
     int max_output)
 {
+    __shared__ int s_base, s_prefix[256];
+
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
     int total = num_slices * max_dets;
-    if (tid >= total) return;
+    bool valid = false;
+    float score = 0.0f;
+
+    if (tid < total) {
+        int si = tid / max_dets;
+        int di = tid % max_dets;
+        if (di < det_num_dets[si]) {
+            score = det_scores[tid];
+            if (score >= conf_threshold) valid = true;
+        }
+    }
+
+    // 线程内 prefix-sum 计数（确定性的 block 内编号）
+    int v = valid ? 1 : 0;
+    s_prefix[threadIdx.x] = v;
+    __syncthreads();
+    for (int off = 1; off < blockDim.x; off <<= 1) {
+        int add = (threadIdx.x >= off) ? s_prefix[threadIdx.x - off] : 0;
+        __syncthreads();
+        s_prefix[threadIdx.x] += add;
+        __syncthreads();
+    }
+
+    int block_cnt = s_prefix[blockDim.x - 1];
+    int my_pos = valid ? (s_prefix[threadIdx.x] - 1) : -1;
+
+    // 每 block 仅一次 atomicAdd 预留全局区间
+    if (threadIdx.x == 0 && block_cnt > 0)
+        s_base = atomicAdd(d_out_count, block_cnt);
+    __syncthreads();
+
+    int gidx = s_base + my_pos;
+    if (gidx < 0 || gidx >= max_output || !valid) return;
 
     int si = tid / max_dets;
-    int di = tid % max_dets;
-    if (di >= det_num_dets[si]) return;
-
-    float score = det_scores[tid];
-    if (score < conf_threshold) return;
-
     int ox = slice_offsets[si * 4 + 0];
     int oy = slice_offsets[si * 4 + 1];
     float fw = static_cast<float>(img_w);
     float fh = static_cast<float>(img_h);
 
-    float x1 = fminf(fmaxf(det_boxes[tid * 4 + 0] + ox, 0.0f), fw);
-    float y1 = fminf(fmaxf(det_boxes[tid * 4 + 1] + oy, 0.0f), fh);
-    float x2 = fminf(fmaxf(det_boxes[tid * 4 + 2] + ox, 0.0f), fw);
-    float y2 = fminf(fmaxf(det_boxes[tid * 4 + 3] + oy, 0.0f), fh);
-
-    int idx = atomicAdd(d_out_count, 1);
-    if (idx >= max_output) return;
-
-    out_boxes[idx * 4 + 0] = x1;
-    out_boxes[idx * 4 + 1] = y1;
-    out_boxes[idx * 4 + 2] = x2;
-    out_boxes[idx * 4 + 3] = y2;
-    out_scores[idx] = score;
-    out_classes[idx] = det_classes[tid];
-    out_slice_idx[idx] = tid;  // 存储原始 flat index（可还原 si 和 di）
+    if (box_dim == 5) {
+        out_boxes[gidx * 5 + 0] = fminf(fmaxf(det_boxes[tid * 5 + 0] + ox, 0.0f), fw);
+        out_boxes[gidx * 5 + 1] = fminf(fmaxf(det_boxes[tid * 5 + 1] + oy, 0.0f), fh);
+        out_boxes[gidx * 5 + 2] = det_boxes[tid * 5 + 2];
+        out_boxes[gidx * 5 + 3] = det_boxes[tid * 5 + 3];
+        out_boxes[gidx * 5 + 4] = det_boxes[tid * 5 + 4];
+    } else {
+        out_boxes[gidx * 4 + 0] = fminf(fmaxf(det_boxes[tid * 4 + 0] + ox, 0.0f), fw);
+        out_boxes[gidx * 4 + 1] = fminf(fmaxf(det_boxes[tid * 4 + 1] + oy, 0.0f), fh);
+        out_boxes[gidx * 4 + 2] = fminf(fmaxf(det_boxes[tid * 4 + 2] + ox, 0.0f), fw);
+        out_boxes[gidx * 4 + 3] = fminf(fmaxf(det_boxes[tid * 4 + 3] + oy, 0.0f), fh);
+    }
+    out_scores[gidx] = score;
+    out_classes[gidx] = det_classes[tid];
+    out_slice_idx[gidx] = tid;
 }
 
 void filter_and_offset(
     const int *det_num_dets, const float *det_boxes,
     const float *det_scores, const int *det_classes,
     const int *slice_offsets,
-    int num_slices, int max_dets,
+    int num_slices, int max_dets, int box_dim,
     float conf_threshold, int img_w, int img_h,
     float *out_boxes, float *out_scores, int *out_classes,
     int *out_slice_idx, int *d_out_count,
@@ -84,7 +112,7 @@ void filter_and_offset(
     int grid = (total + block - 1) / block;
     filter_offset_kernel<<<grid, block, 0, stream>>>(
         det_num_dets, det_boxes, det_scores, det_classes,
-        slice_offsets, num_slices, max_dets,
+        slice_offsets, num_slices, max_dets, box_dim,
         conf_threshold, img_w, img_h,
         out_boxes, out_scores, out_classes,
         out_slice_idx, d_out_count, max_output);
@@ -191,83 +219,83 @@ void strided_copy_keypoints(
 }
 
 // ====================================================================
-//  2. nms_per_class: 逐类 NMS（GPU 版）
+//  2. nms_per_class: 确定性逐类 NMS（GPU 版），支持 AABB 与 OBB
 // ====================================================================
 
-static __global__ void class_offset_kernel(
-    const int *__restrict__ classes, int N,
-    int *__restrict__ offsets, int num_classes)
+static __device__ float box_iou(
+    float aleft, float atop, float aright, float abottom,
+    float bleft, float btop, float bright, float bbottom)
 {
-    for (int i = threadIdx.x; i <= num_classes; i += blockDim.x) offsets[i] = 0;
-    __syncthreads();
-    for (int i = threadIdx.x; i < N; i += blockDim.x)
-        atomicAdd(&offsets[classes[i]], 1);
-    __syncthreads();
-    if (threadIdx.x == 0) {
-        int sum = 0;
-        for (int c = 0; c < num_classes; ++c) {
-            int cnt = offsets[c];
-            offsets[c] = sum;
-            sum += cnt;
-        }
-        offsets[num_classes] = sum;
-    }
+    float cleft   = fmaxf(aleft, bleft);
+    float ctop    = fmaxf(atop, btop);
+    float cright  = fminf(aright, bright);
+    float cbottom = fminf(abottom, bbottom);
+    float c_area  = fmaxf(cright - cleft, 0.0f) * fmaxf(cbottom - ctop, 0.0f);
+    if (c_area == 0.0f) return 0.0f;
+    float a_area = fmaxf(0.0f, aright - aleft) * fmaxf(0.0f, abottom - atop);
+    float b_area = fmaxf(0.0f, bright - bleft) * fmaxf(0.0f, bbottom - btop);
+    return c_area / (a_area + b_area - c_area);
 }
 
-static __global__ void scatter_kernel(
-    const float *__restrict__ scores,
-    const int *__restrict__ classes, int N,
-    int *__restrict__ out_indices,
-    const int *__restrict__ offsets,
-    int *__restrict__ counters)
+static __device__ void covariance_matrix(float w, float h, float r, float& a, float& b, float& c)
 {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N) return;
-    int c = classes[idx];
-    int pos = atomicAdd(&counters[c], 1);
-    out_indices[offsets[c] + pos] = idx;
+    float a_val = w * w / 12.0f;
+    float b_val = h * h / 12.0f;
+    float cos_r = cosf(r), sin_r = sinf(r);
+    a = a_val * cos_r * cos_r + b_val * sin_r * sin_r;
+    b = a_val * sin_r * sin_r + b_val * cos_r * cos_r;
+    c = (a_val - b_val) * sin_r * cos_r;
 }
 
-static __global__ void nms_kernel(
+static __device__ float box_probiou(
+    float cx1, float cy1, float w1, float h1, float r1,
+    float cx2, float cy2, float w2, float h2, float r2, float eps = 1e-7f)
+{
+    float a1, b1, c1, a2, b2, c2;
+    covariance_matrix(w1, h1, r1, a1, b1, c1);
+    covariance_matrix(w2, h2, r2, a2, b2, c2);
+    float t1 = ((a1+a2)*powf(cy1-cy2,2) + (b1+b2)*powf(cx1-cx2,2)) / ((a1+a2)*(b1+b2) - powf(c1+c2,2) + eps);
+    float t2 = ((c1+c2)*(cx2-cx1)*(cy1-cy2)) / ((a1+a2)*(b1+b2) - powf(c1+c2,2) + eps);
+    float t3 = logf(((a1+a2)*(b1+b2) - powf(c1+c2,2)) /
+               (4.f*sqrtf(fmaxf(a1*b1-c1*c1,0.f))*sqrtf(fmaxf(a2*b2-c2*c2,0.f)) + eps) + eps);
+    float bd = fmaxf(fminf(0.25f*t1 + 0.5f*t2 + 0.5f*t3, 100.0f), eps);
+    return 1.f - sqrtf(1.f - expf(-bd) + eps);
+}
+
+static __global__ void fast_nms_kernel(
     const float *__restrict__ boxes,
-    const int *__restrict__ sorted_idx,
-    const int *__restrict__ offsets,
-    int num_classes, float iou_threshold,
-    int *__restrict__ flags)
+    const float *__restrict__ scores,
+    const int   *__restrict__ classes,
+    int N, int box_dim, float iou_threshold,
+    int *__restrict__ keep_flags)   // 1=keep, 0=suppressed
 {
-    int c = blockIdx.x;
-    int start = offsets[c];
-    int cnt = offsets[c + 1] - start;
-    if (cnt <= 0) return;
+    int pos = blockDim.x * blockIdx.x + threadIdx.x;
+    if (pos >= N) return;
 
-    int tid = threadIdx.x;
-    extern __shared__ float smem[];
-    float *sx1 = smem;
-    float *sy1 = smem + cnt;
-    float *sx2 = smem + cnt * 2;
-    float *sy2 = smem + cnt * 3;
-    float *sarea = smem + cnt * 4;
+    // 确定性排序：score 降序，index 升序
+    float cur_score = scores[pos];
+    int   cur_class = classes[pos];
 
-    if (tid < cnt) {
-        int bi = sorted_idx[start + tid];
-        sx1[tid] = boxes[bi * 4 + 0];
-        sy1[tid] = boxes[bi * 4 + 1];
-        sx2[tid] = boxes[bi * 4 + 2];
-        sy2[tid] = boxes[bi * 4 + 3];
-        sarea[tid] = (sx2[tid] - sx1[tid]) * (sy2[tid] - sy1[tid]);
-    }
-    __syncthreads();
+    for (int i = 0; i < N; ++i) {
+        if (i == pos || classes[i] != cur_class) continue;
 
-    for (int i = tid; i < cnt; i += blockDim.x) {
-        bool keep = true;
-        for (int j = 0; j < i; ++j) {
-            if (!flags[start + j]) continue;
-            float inter = fmaxf(0.0f, fminf(sx2[i], sx2[j]) - fmaxf(sx1[i], sx1[j]))
-                        * fmaxf(0.0f, fminf(sy2[i], sy2[j]) - fmaxf(sy1[i], sy1[j]));
-            float iou = inter / (sarea[i] + sarea[j] - inter + 1e-8f);
-            if (iou > iou_threshold) { keep = false; break; }
+        float item_score = scores[i];
+        if (item_score > cur_score || (item_score == cur_score && i < pos)) {
+            float iou;
+            if (box_dim == 5) {
+                iou = box_probiou(
+                    boxes[pos*5+0], boxes[pos*5+1], boxes[pos*5+2], boxes[pos*5+3], boxes[pos*5+4],
+                    boxes[i*5+0],   boxes[i*5+1],   boxes[i*5+2],   boxes[i*5+3],   boxes[i*5+4]);
+            } else {
+                iou = box_iou(
+                    boxes[pos*4+0], boxes[pos*4+1], boxes[pos*4+2], boxes[pos*4+3],
+                    boxes[i*4+0],   boxes[i*4+1],   boxes[i*4+2],   boxes[i*4+3]);
+            }
+            if (iou > iou_threshold) {
+                keep_flags[pos] = 0;
+                return;
+            }
         }
-        flags[start + i] = keep ? 1 : 0;
     }
 }
 
@@ -284,32 +312,37 @@ static __global__ void compact_kernel(
     }
 }
 
+static __global__ void fill_identity_kernel(int *arr, int N)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) arr[i] = i;
+}
+
 void nms_per_class(
     const float *boxes, const float *scores, const int *classes,
-    int N, float iou_threshold, int num_classes,
+    int N, float iou_threshold, int num_classes, int box_dim,
     int *keep, int *d_num_kept,
     int *d_class_offsets, int *d_counters,
     int *d_flags, cudaStream_t stream)
 {
     if (N <= 0) { cudaMemsetAsync(d_num_kept, 0, sizeof(int), stream); return; }
 
-    const int BS = 256;
+    int block = 256;
+    int grid = (N + block - 1) / block;
 
-    class_offset_kernel<<<1, BS, 0, stream>>>(classes, N, d_class_offsets, num_classes);
-
-    cudaMemsetAsync(d_counters, 0, num_classes * sizeof(int), stream);
-    int grid = (N + BS - 1) / BS;
-    scatter_kernel<<<grid, BS, 0, stream>>>(scores, classes, N, keep, d_class_offsets, d_counters);
-
+    // d_flags 初始化为 1（全部 keep）
     cudaMemsetAsync(d_flags, 1, N * sizeof(int), stream);
 
-    int max_cls = min(N, 1024);
-    size_t smem_sz = static_cast<size_t>(max_cls) * 5 * sizeof(float);
-    nms_kernel<<<num_classes, max_cls, smem_sz, stream>>>(
-        boxes, keep, d_class_offsets, num_classes, iou_threshold, d_flags);
+    // 确定性 NMS：score 降序 + index 升序 tiebreaker
+    fast_nms_kernel<<<grid, block, 0, stream>>>(
+        boxes, scores, classes, N, box_dim, iou_threshold, d_flags);
 
+    // 初始化 keep 为 [0,1,2,...,N-1]（compact_kernel 需要读取）
+    fill_identity_kernel<<<grid, block, 0, stream>>>(keep, N);
+
+    // compact: 将 keep_flags==1 的索引收集到 keep 数组
     cudaMemsetAsync(d_num_kept, 0, sizeof(int), stream);
-    compact_kernel<<<grid, BS, 0, stream>>>(keep, d_flags, N, keep, d_num_kept);
+    compact_kernel<<<grid, block, 0, stream>>>(keep, d_flags, N, keep, d_num_kept);
 }
 
 // ====================================================================

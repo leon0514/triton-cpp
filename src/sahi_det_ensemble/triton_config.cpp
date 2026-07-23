@@ -59,8 +59,14 @@ TRITONSERVER_Error *ParseEnsembleConfig(
             config.output_type = OutputType::POSE;
         else if (out_type == "seg")
             config.output_type = OutputType::SEG;
+        else if (out_type == "obb")
+            config.output_type = OutputType::OBB;
         else
             config.output_type = OutputType::DET;
+
+        // Box 维度：OBB 模式为 5 (cx,cy,w,h,angle)，其余为 4 (x1,y1,x2,y2)
+        if (config.output_type == OutputType::OBB)
+            config.box_dim = 5;
 
         // 检测模型名称
         std::string det_model = GetStringParameter(parameters, "detector_model");

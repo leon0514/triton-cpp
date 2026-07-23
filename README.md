@@ -8,6 +8,7 @@
 - `YOLO26_DET_PRE_POSTPROCESS` / `YOLO26_OBB_PRE_POSTPROCESS` / `YOLO26_POSE_PRE_POSTPROCESS` / `YOLO26_SEG_PRE_POSTPROCESS`：YOLO26系列检测 / OBB / 姿态 / 分割后处理。
 - `RFDETR_DET_PRE_POSTPROCESS`：RF-DETR 后处理。
 - `RFDETR_SEG_PRE_POSTPROCESS`：RF-DETR 分割后处理（支持 `return_masks` 开关）。
+- `sahi_ensemble`：SAHI（Slicing Aided Hyper Inference）集成后端，支持 det / pose / seg 三种输出类型。
 
 模型仓库位于 `workspace/models/`，所有自定义后端 `.so` 都嵌在对应模型的 `1/` 目录下，通过 `docker-compose.yml` 一键启动。
 
@@ -62,6 +63,7 @@ docker run --rm --gpus all \
   build/libtriton_yolo26_postprocess.so
   build/libtriton_rfdetr_postprocess.so
   build/libtriton_rfdetr_seg_postprocess.so
+  build/libtriton_sahi_ensemble.so
   ```
 
 ### 2. 复制产物到模型仓库
@@ -80,6 +82,14 @@ cp build/libtriton_yolo26_obb_postprocess.so workspace/models/YOLO26_OBB_PRE_POS
 cp build/libtriton_yolo26_seg_postprocess.so workspace/models/YOLO26_SEG_PRE_POSTPROCESS/1/
 cp build/libtriton_rfdetr_postprocess.so workspace/models/RFDETR_DET_PRE_POSTPROCESS/1/
 cp build/libtriton_rfdetr_seg_postprocess.so workspace/models/RFDETR_SEG_PRE_POSTPROCESS/1/
+cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO11_DET_ENSEMBLE/1/
+cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO11_POSE_ENSEMBLE/1/
+cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO11_SEG_ENSEMBLE/1/
+cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO11_OBB_ENSEMBLE/1/
+cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO26_DET_ENSEMBLE/1/
+cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO26_POSE_ENSEMBLE/1/
+cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO26_SEG_ENSEMBLE/1/
+cp build/libtriton_sahi_ensemble.so workspace/models/SAHI_YOLO26_OBB_ENSEMBLE/1/
 ```
 
 ### 3. 自定义 CUDA 架构
@@ -403,6 +413,9 @@ parameters: {
 | `YOLO11_SEG_PRE_POSTPROCESS` | `model_output`, `mask_protos` | `[116, 8400]`, `[32, 160, 160]` | 同上 + `detection_masks[-1]`, `mask_offsets[-1]`, `mask_shapes[-1,2]` |
 | `YOLOV5_DET_PRE_POSTPROCESS` | `model_output` | `[25200, 85]` | 同 `YOLO11_DET_PRE_POSTPROCESS` |
 | `YOLO26_DET_PRE_POSTPROCESS` | `model_output` | `[300, 6]` | 同 `YOLO11_DET_PRE_POSTPROCESS` |
+| `YOLO26_OBB_PRE_POSTPROCESS` | `model_output` | `[300, X]` | 同 `YOLO11_OBB_PRE_POSTPROCESS` |
+| `YOLO26_POSE_PRE_POSTPROCESS` | `model_output`, `transform_metadata` | `[300, 57]`, `[6]` | 同 `YOLO11_POSE_PRE_POSTPROCESS` |
+| `YOLO26_SEG_PRE_POSTPROCESS` | `model_output`, `mask_protos`, `transform_metadata` | `[300, X]`, `[32,160,160]`, `[6]` | 同 `YOLO11_SEG_PRE_POSTPROCESS` |
 | `RFDETR_DET_PRE_POSTPROCESS` | `dets`, `labels` | `[300, 4]`, `[300, 91]` | 同 `YOLO11_DET_PRE_POSTPROCESS` |
 
 ### 4. Ensemble 配置示例（`YOLO11_DET_PRE_ENSEMBLE/config.pbtxt`）
@@ -448,7 +461,167 @@ ensemble_scheduling {
 }
 ```
 
-### 5. 标签服务配置（`CUSTOM_LABELS/config.pbtxt`）
+### 5. SAHI Ensemble 配置
+
+SAHI（Slicing Aided Hyper Inference）通过将大图切分为多个小块分别推理，再合并结果，大幅提升高分辨率图像上的小目标检测效果。
+
+本项目通过 `sahi_ensemble` 后端统一实现，通过 `output_type` 参数支持三种输出类型：
+
+| `output_type` | 说明 | 对应 Ensemble 示例 |
+|---|---|---|
+| `det` | 目标检测 | `SAHI_YOLO11_DET_ENSEMBLE` / `SAHI_YOLO26_DET_ENSEMBLE` |
+| `pose` | 姿态估计 | `SAHI_YOLO11_POSE_ENSEMBLE` / `SAHI_YOLO26_POSE_ENSEMBLE` |
+| `seg` | 实例分割 | `SAHI_YOLO11_SEG_ENSEMBLE` / `SAHI_YOLO26_SEG_ENSEMBLE` |
+| `obb` | 旋转框检测 | `SAHI_YOLO11_OBB_ENSEMBLE` / `SAHI_YOLO26_OBB_ENSEMBLE` |
+
+**工作流程（全部 GPU 加速）：**
+
+1. 接收 `raw_image [H, W, 3]`
+2. 同步调用 `SAHI_PREPROCESS` → 切分为多个 `slice_width × slice_height` 小块 + 每个小块的偏移量
+3. 分块（按 `chunk_size`）调用指定的 `detector_model` 进行推理
+4. CUDA kernel：置信度过滤 + 偏移校正 + 裁剪（一体化）
+5. CUDA 逐类 NMS（合并跨切片的重叠框）
+6. Top-K 排序 + 填充固定输出
+
+**配置示例（det 类型）：**
+
+```protobuf
+name: "SAHI_YOLO11_DET_ENSEMBLE"
+backend: "sahi_ensemble"
+max_batch_size: 0
+
+input [
+  { name: "raw_image", data_type: TYPE_UINT8, dims: [-1, -1, -1, 3] }
+]
+
+output [
+  { name: "num_dets",          data_type: TYPE_INT32, dims: [1] },
+  { name: "detection_boxes",   data_type: TYPE_FP32, dims: [300, 4] },
+  { name: "detection_scores",  data_type: TYPE_FP32, dims: [300] },
+  { name: "detection_classes", data_type: TYPE_INT32, dims: [300] }
+]
+
+parameters: {
+  key: "output_type"     value: { string_value: "det" }
+}
+parameters: {
+  key: "detector_model"  value: { string_value: "YOLO11_DET_PRE_ENSEMBLE" }
+}
+parameters: {
+  key: "conf_threshold"  value: { string_value: "0.25" }
+}
+parameters: {
+  key: "iou_threshold"   value: { string_value: "0.45" }
+}
+parameters: {
+  key: "max_detections"  value: { string_value: "300" }
+}
+parameters: {
+  key: "chunk_size"      value: { string_value: "16" }
+}
+parameters: {
+  key: "num_classes"     value: { string_value: "80" }
+}
+parameters: {
+  key: "slice_width"     value: { string_value: "640" }
+}
+parameters: {
+  key: "slice_height"    value: { string_value: "640" }
+}
+```
+
+**pose 类型额外输出：**
+
+```protobuf
+output [
+  { name: "num_dets",            data_type: TYPE_INT32, dims: [1] },
+  { name: "detection_boxes",     data_type: TYPE_FP32, dims: [300, 4] },
+  { name: "detection_scores",    data_type: TYPE_FP32, dims: [300] },
+  { name: "detection_classes",   data_type: TYPE_INT32, dims: [300] },
+  { name: "detection_keypoints", data_type: TYPE_FP32, dims: [300, 17, 3] }
+]
+
+parameters: {
+  key: "output_type"     value: { string_value: "pose" }
+}
+parameters: {
+  key: "detector_model"  value: { string_value: "YOLO11_POSE_PRE_ENSEMBLE" }
+}
+parameters: {
+  key: "num_keypoints"   value: { string_value: "17" }
+}
+parameters: {
+  key: "num_classes"     value: { string_value: "1" }
+}
+```
+
+**seg 类型额外输出：**
+
+```protobuf
+output [
+  ...
+  { name: "detection_masks",   data_type: TYPE_FP32, dims: [300, 25600] },
+  { name: "mask_offsets",      data_type: TYPE_INT32, dims: [300] },
+  { name: "mask_shapes",       data_type: TYPE_INT32, dims: [300, 2] }
+]
+
+parameters: {
+  key: "output_type"       value: { string_value: "seg" }
+}
+parameters: {
+  key: "detector_model"    value: { string_value: "YOLO11_SEG_PRE_ENSEMBLE" }
+}
+parameters: {
+  key: "mask_output_size"  value: { string_value: "160" }
+}
+parameters: {
+  key: "num_classes"       value: { string_value: "80" }
+}
+```
+
+**obb 类型额外输出：**
+
+```protobuf
+output [
+  { name: "num_dets", data_type: TYPE_INT32, dims: [1] },
+  { name: "detection_boxes", data_type: TYPE_FP32, dims: [300, 5] },
+  { name: "detection_scores", data_type: TYPE_FP32, dims: [300] },
+  { name: "detection_classes", data_type: TYPE_INT32, dims: [300] }
+]
+
+parameters: {
+  key: "output_type"     value: { string_value: "obb" }
+}
+parameters: {
+  key: "detector_model"  value: { string_value: "YOLO11_OBB_PRE_ENSEMBLE" }
+}
+parameters: {
+  key: "num_classes"     value: { string_value: "15" }
+}
+```
+
+**参数说明：**
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `output_type` | string | `det` | 输出类型：`det` / `pose` / `seg` |
+| `detector_model` | string | `YOLO11_DET_PRE_ENSEMBLE` | 底层的检测 ensemble 模型名 |
+| `conf_threshold` | float | `0.25` | SAHI 合并阶段的置信度阈值 |
+| `iou_threshold` | float | `0.45` | SAHI 合并阶段的 NMS IoU 阈值 |
+| `max_detections` | int | `300` | 最终最多保留的检测数 |
+| `chunk_size` | int | `16` | 每次发给 detector 的最大切片数（batch size） |
+| `num_classes` | int | `80` | 类别数（pose 模式下通常为 `1`） |
+| `num_keypoints` | int | `17` | 关键点数（仅 pose 模式） |
+| `mask_output_size` | int | `160` | 分割 mask 输出尺寸（仅 seg 模式） |
+| `slice_width` | int | `640` | SAHI 切片宽度 |
+| `slice_height` | int | `640` | SAHI 切片高度 |
+| `overlap_width_ratio` | float | `0.2` | 切片水平重叠比例 |
+| `overlap_height_ratio` | float | `0.2` | 切片垂直重叠比例 |
+| `max_slices` | int | `64` | 最大切片数（防止异常大图 OOM） |
+
+> **注意**：SAHI ensemble 的 `max_batch_size` 必须为 `0`，输入 dims 为 `[-1, -1, -1, 3]`（带 batch 占位）。`detector_model` 指定的底层模型必须有 `max_batch_size > 0` 以支持分块批量推理。
+
+### 6. 标签服务配置（`CUSTOM_LABELS/config.pbtxt`）
 
 ```protobuf
 name: "CUSTOM_LABELS"
