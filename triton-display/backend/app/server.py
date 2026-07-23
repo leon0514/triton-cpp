@@ -270,21 +270,23 @@ async def infer(
 
             if "seg" in model_name_lower:
                 masks_raw = response.as_numpy("detection_masks")
-                masks = masks_raw.reshape(-1, masks_raw.shape[-1])[i]
-                offsets = response.as_numpy("mask_offsets").reshape(-1)
-                shapes_raw = response.as_numpy("mask_shapes")
-                shapes = shapes_raw.reshape(-1, shapes_raw.shape[-1])
-                off = int(offsets[i])
-                h, w = int(shapes[i, 0]), int(shapes[i, 1])
-                if h > 0 and w > 0 and off >= 0:
+                masks_2d = masks_raw.reshape(-1, masks_raw.shape[-1])
+                mask_slot = masks_2d.shape[-1]
+                h, w = int(mask_slot ** 0.5), int(mask_slot ** 0.5)  # 默认正方形
+                # 如果有 mask_shapes，读取实际尺寸
+                try:
+                    shapes_raw = response.as_numpy("mask_shapes")
+                    shapes = shapes_raw.reshape(-1, shapes_raw.shape[-1])
+                    h, w = int(shapes[i, 0]), int(shapes[i, 1])
+                except Exception:
+                    pass
+                if mask_slot > 0:
                     det["mask_shape"] = [h, w]
-                    det["mask_offset"] = off
-                    mask_data = masks[off : off + h * w].astype(np.float32)
+                    mask_data = masks_2d[i].astype(np.float32)
                     if raw_mask:
                         det["mask"] = mask_data.tolist()
                     else:
                         det["mask"] = base64.b64encode(mask_data.tobytes()).decode('ascii')
-                    # 始终附带统计信息，方便调试时查看
                     det["mask_stats"] = {
                         "min": float(mask_data.min()),
                         "max": float(mask_data.max()),

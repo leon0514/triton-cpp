@@ -271,7 +271,6 @@ struct InstanceState {
 
     // Seg masks 工作区（仅 seg 模式）
     tensor::Memory<float> mask_workspace_;
-    tensor::Memory<int> mask_offset_workspace_;
     tensor::Memory<int> mask_shape_workspace_;
 
     explicit InstanceState(TRITONBACKEND_ModelInstance *inst) : instance(inst) {
@@ -320,7 +319,6 @@ struct InstanceState {
         // Seg masks 工作区（可选，按 chunk_size 分配以节省显存）
         mask_workspace_.gpu(cfg.chunk_size * cfg.max_detections *
                            cfg.mask_output_size * cfg.mask_output_size);
-        mask_offset_workspace_.gpu(cfg.chunk_size * max_dets);
         mask_shape_workspace_.gpu(cfg.chunk_size * max_dets * 2);
 
         return nullptr;
@@ -589,7 +587,6 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                     err = TRITONSERVER_InferenceRequestAddRequestedOutput(det_req, "detection_keypoints");
                 if (!err && cfg.output_type == OutputType::SEG) {
                     err = TRITONSERVER_InferenceRequestAddRequestedOutput(det_req, "detection_masks");
-                    if (!err) err = TRITONSERVER_InferenceRequestAddRequestedOutput(det_req, "mask_offsets");
                     if (!err) err = TRITONSERVER_InferenceRequestAddRequestedOutput(det_req, "mask_shapes");
                 }
             }
@@ -632,14 +629,13 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
             auto e4 = GetOutputByName(det_resp, "detection_classes", &cl_b, &cl_sz, &cl_sh);
 
             // Pose/seg 附加输出
-            const void *kp_b = nullptr, *mask_b = nullptr, *mo_b = nullptr, *ms_b = nullptr;
-            size_t kp_sz = 0, mask_sz = 0, mo_sz = 0, ms_sz = 0;
-            std::vector<int64_t> kp_sh, mask_sh, mo_sh, ms_sh;
+            const void *kp_b = nullptr, *mask_b = nullptr, *ms_b = nullptr;
+            size_t kp_sz = 0, mask_sz = 0, ms_sz = 0;
+            std::vector<int64_t> kp_sh, mask_sh, ms_sh;
             if (cfg.output_type == OutputType::POSE)
                 e1 = GetOutputByName(det_resp, "detection_keypoints", &kp_b, &kp_sz, &kp_sh);
             if (cfg.output_type == OutputType::SEG) {
                 GetOutputByName(det_resp, "detection_masks", &mask_b, &mask_sz, &mask_sh);
-                GetOutputByName(det_resp, "mask_offsets", &mo_b, &mo_sz, &mo_sh);
                 GetOutputByName(det_resp, "mask_shapes", &ms_b, &ms_sz, &ms_sh);
             }
 
@@ -708,18 +704,10 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
             if (cfg.output_type == OutputType::SEG && mask_b) {
                 int mask_src_stride = actual_num_dets * cfg.mask_output_size * cfg.mask_output_size;
                 int mask_dst_stride = cfg.max_detections * cfg.mask_output_size * cfg.mask_output_size;
-                // For seg, use chunk-local workspace since total memory is large
                 sahi_det_ensemble::strided_copy_scores(
                     static_cast<const float *>(mask_b),
                     is->mask_workspace_.gpu(),
                     n, mask_src_stride, mask_dst_stride, stream);
-                // mask_offsets: [n, actual_num_dets] → [n, max_dets]
-                if (mo_b) {
-                    sahi_det_ensemble::strided_copy_classes(
-                        static_cast<const int *>(mo_b),
-                        is->mask_offset_workspace_.gpu() + s * cfg.max_detections,
-                        n, actual_num_dets, cfg.max_detections, stream);
-                }
                 // mask_shapes: [n, actual_num_dets, 2] → [n, max_dets, 2]
                 if (ms_b) {
                     sahi_det_ensemble::strided_copy_classes(
@@ -853,14 +841,10 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
             }
             if (cfg.output_type == OutputType::SEG) {
                 const int64_t k_msk[2] = {cfg.max_detections, cfg.mask_output_size * cfg.mask_output_size};
-                const int64_t k_off[1] = {cfg.max_detections};
                 const int64_t k_shp[2] = {cfg.max_detections, 2};
                 void *mb = nullptr; alloc_output("detection_masks", TRITONSERVER_TYPE_FP32,
                     k_msk, 2, cfg.max_detections * cfg.mask_output_size * cfg.mask_output_size * sizeof(float), &mb);
                 if (mb) memset(mb, 0, cfg.max_detections * cfg.mask_output_size * cfg.mask_output_size * sizeof(float));
-                void *mob = nullptr; alloc_output("mask_offsets", TRITONSERVER_TYPE_INT32,
-                    k_off, 1, cfg.max_detections * sizeof(int32_t), &mob);
-                if (mob) memset(mob, 0, cfg.max_detections * sizeof(int32_t));
                 void *msb = nullptr; alloc_output("mask_shapes", TRITONSERVER_TYPE_INT32,
                     k_shp, 2, cfg.max_detections * 2 * sizeof(int32_t), &msb);
                 if (msb) memset(msb, 0, cfg.max_detections * 2 * sizeof(int32_t));
@@ -968,11 +952,10 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
             }
         }
 
-        // ---- Seg: detection_masks / mask_offsets / mask_shapes ----
+        // ---- Seg: detection_masks / mask_shapes ----
         if (cfg.output_type == OutputType::SEG) {
             int mask_pixels = cfg.mask_output_size * cfg.mask_output_size;
-            const int64_t kk_msk[2] = {cfg.max_detections, cfg.mask_output_size * cfg.mask_output_size};
-            const int64_t kk_off[1] = {cfg.max_detections};
+            const int64_t kk_msk[2] = {cfg.max_detections, mask_pixels};
             const int64_t kk_shp[2] = {cfg.max_detections, 2};
 
             auto alloc_seg_out = [&](const char *n, TRITONSERVER_DataType dt,
@@ -982,27 +965,22 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                 if (e) { TRITONSERVER_ErrorDelete(e); *buf = nullptr; }
             };
 
-            void *mb = nullptr, *mob = nullptr, *msb = nullptr;
+            void *mb = nullptr, *msb = nullptr;
             alloc_seg_out("detection_masks", TRITONSERVER_TYPE_FP32, kk_msk, 2,
                 cfg.max_detections * mask_pixels * sizeof(float), &mb);
-            alloc_seg_out("mask_offsets", TRITONSERVER_TYPE_INT32, kk_off, 1,
-                cfg.max_detections * sizeof(int32_t), &mob);
             alloc_seg_out("mask_shapes", TRITONSERVER_TYPE_INT32, kk_shp, 2,
                 cfg.max_detections * 2 * sizeof(int32_t), &msb);
 
             if (mb) memset(mb, 0, cfg.max_detections * mask_pixels * sizeof(float));
-            if (mob) memset(mob, 0, cfg.max_detections * sizeof(int32_t));
             if (msb) memset(msb, 0, cfg.max_detections * 2 * sizeof(int32_t));
 
             if (mb && final_n > 0) {
                 float *fm = static_cast<float *>(mb);
                 int *fshp = static_cast<int *>(msb);
-                // mask_shapes = [160, 160]
                 for (int i = 0; i < final_n; ++i) {
                     fshp[i * 2 + 0] = cfg.mask_output_size;
                     fshp[i * 2 + 1] = cfg.mask_output_size;
                 }
-                // 从 mask_workspace_ 读取 masks
                 int mask_stride = cfg.max_detections * mask_pixels;
                 int total_mask_floats = info.slice_num * mask_stride;
                 std::vector<float> all_masks(total_mask_floats);
@@ -1020,7 +998,6 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                            mask_pixels * sizeof(float));
                 }
             }
-            // mask_offsets 留空（全零），客户端会正确处理
         }
     }
 

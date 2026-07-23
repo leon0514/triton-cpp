@@ -222,46 +222,7 @@ void strided_copy_keypoints(
 //  2. nms_per_class: 确定性逐类 NMS（GPU 版），支持 AABB 与 OBB
 // ====================================================================
 
-#include "common/iou.cuh"
-using common_iou::box_iou;
-using common_iou::box_probiou;
-
-static __global__ void fast_nms_kernel(
-    const float *__restrict__ boxes,
-    const float *__restrict__ scores,
-    const int   *__restrict__ classes,
-    int N, int box_dim, float iou_threshold,
-    int *__restrict__ keep_flags)   // 1=keep, 0=suppressed
-{
-    int pos = blockDim.x * blockIdx.x + threadIdx.x;
-    if (pos >= N) return;
-
-    // 确定性排序：score 降序，index 升序
-    float cur_score = scores[pos];
-    int   cur_class = classes[pos];
-
-    for (int i = 0; i < N; ++i) {
-        if (i == pos || classes[i] != cur_class) continue;
-
-        float item_score = scores[i];
-        if (item_score > cur_score || (item_score == cur_score && i < pos)) {
-            float iou;
-            if (box_dim == 5) {
-                iou = box_probiou(
-                    boxes[pos*5+0], boxes[pos*5+1], boxes[pos*5+2], boxes[pos*5+3], boxes[pos*5+4],
-                    boxes[i*5+0],   boxes[i*5+1],   boxes[i*5+2],   boxes[i*5+3],   boxes[i*5+4]);
-            } else {
-                iou = box_iou(
-                    boxes[pos*4+0], boxes[pos*4+1], boxes[pos*4+2], boxes[pos*4+3],
-                    boxes[i*4+0],   boxes[i*4+1],   boxes[i*4+2],   boxes[i*4+3]);
-            }
-            if (iou > iou_threshold) {
-                keep_flags[pos] = 0;
-                return;
-            }
-        }
-    }
-}
+#include "common/fast_nms.cuh"
 
 static __global__ void compact_kernel(
     const int *__restrict__ sorted_idx,
@@ -294,17 +255,12 @@ void nms_per_class(
     int block = 256;
     int grid = (N + block - 1) / block;
 
-    // d_flags 初始化为 1（全部 keep）
     cudaMemsetAsync(d_flags, 1, N * sizeof(int), stream);
 
-    // 确定性 NMS：score 降序 + index 升序 tiebreaker
-    fast_nms_kernel<<<grid, block, 0, stream>>>(
+    common_nms::fast_nms_flat_kernel<<<grid, block, 0, stream>>>(
         boxes, scores, classes, N, box_dim, iou_threshold, d_flags);
 
-    // 初始化 keep 为 [0,1,2,...,N-1]（compact_kernel 需要读取）
     fill_identity_kernel<<<grid, block, 0, stream>>>(keep, N);
-
-    // compact: 将 keep_flags==1 的索引收集到 keep 数组
     cudaMemsetAsync(d_num_kept, 0, sizeof(int), stream);
     compact_kernel<<<grid, block, 0, stream>>>(keep, d_flags, N, keep, d_num_kept);
 }

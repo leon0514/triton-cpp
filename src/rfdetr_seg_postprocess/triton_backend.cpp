@@ -274,7 +274,6 @@ struct RequestInfo
     void *scores_buffer = nullptr;
     void *classes_buffer = nullptr;
     void *detection_masks_buffer = nullptr;
-    void *mask_offsets_buffer = nullptr;
     void *mask_shapes_buffer = nullptr;
 
     TRITONSERVER_MemoryType num_dets_mem_type = TRITONSERVER_MEMORY_CPU;
@@ -282,7 +281,6 @@ struct RequestInfo
     TRITONSERVER_MemoryType scores_mem_type = TRITONSERVER_MEMORY_CPU;
     TRITONSERVER_MemoryType classes_mem_type = TRITONSERVER_MEMORY_CPU;
     TRITONSERVER_MemoryType detection_masks_mem_type = TRITONSERVER_MEMORY_CPU;
-    TRITONSERVER_MemoryType mask_offsets_mem_type = TRITONSERVER_MEMORY_CPU;
     TRITONSERVER_MemoryType mask_shapes_mem_type = TRITONSERVER_MEMORY_CPU;
 
     int64_t num_dets_mem_type_id = 0;
@@ -290,7 +288,6 @@ struct RequestInfo
     int64_t scores_mem_type_id = 0;
     int64_t classes_mem_type_id = 0;
     int64_t detection_masks_mem_type_id = 0;
-    int64_t mask_offsets_mem_type_id = 0;
     int64_t mask_shapes_mem_type_id = 0;
 };
 
@@ -782,8 +779,6 @@ TRITONBACKEND_ModelInstanceExecute(
         infos[i].classes_mem_type_id  = device_id;
         infos[i].detection_masks_mem_type    = TRITONSERVER_MEMORY_GPU;
         infos[i].detection_masks_mem_type_id = device_id;
-        infos[i].mask_offsets_mem_type       = TRITONSERVER_MEMORY_GPU;
-        infos[i].mask_offsets_mem_type_id    = device_id;
         infos[i].mask_shapes_mem_type        = TRITONSERVER_MEMORY_GPU;
         infos[i].mask_shapes_mem_type_id     = device_id;
     }
@@ -934,7 +929,6 @@ TRITONBACKEND_ModelInstanceExecute(
     float *d_scores = postprocessor->scores_gpu();
     int *d_classes  = postprocessor->classes_gpu();
     float *d_detection_masks = postprocessor->detection_masks_gpu();
-    int *d_mask_offsets      = postprocessor->mask_offsets_gpu();
     int *d_mask_shapes       = postprocessor->mask_shapes_gpu();
 
     if (total_images > static_cast<int>(instance_state->pinned_capacity))
@@ -1010,9 +1004,9 @@ TRITONBACKEND_ModelInstanceExecute(
         const int64_t scores_shape[2]   = {infos[i].batch_size, actual_num_dets};
         const int64_t classes_shape[2]  = {infos[i].batch_size, actual_num_dets};
         const bool return_masks = config.return_masks;
-        const int64_t detection_masks_shape[2] = {infos[i].batch_size,
-                                                  return_masks ? actual_num_dets * slot_size : 0};
-        const int64_t mask_offsets_shape[2]    = {infos[i].batch_size, actual_num_dets};
+        const int64_t detection_masks_shape[3] = {infos[i].batch_size,
+                                                  return_masks ? actual_num_dets : 0,
+                                                  return_masks ? slot_size : 0};
         const int64_t mask_shapes_shape[3]     = {infos[i].batch_size, actual_num_dets, 2};
 
         const size_t num_dets_bytes = infos[i].batch_size * sizeof(int);
@@ -1022,7 +1016,6 @@ TRITONBACKEND_ModelInstanceExecute(
         const size_t detection_masks_bytes = return_masks
             ? infos[i].batch_size * actual_num_dets * slot_size * sizeof(float)
             : 0;
-        const size_t mask_offsets_bytes    = infos[i].batch_size * actual_num_dets * sizeof(int);
         const size_t mask_shapes_bytes     = infos[i].batch_size * actual_num_dets * 2 * sizeof(int);
 
         GUARDED_RETURN_IF_ERROR(AllocateOutput(
@@ -1051,15 +1044,11 @@ TRITONBACKEND_ModelInstanceExecute(
 
         GUARDED_RETURN_IF_ERROR(AllocateOutput(
             infos[i].response, "detection_masks", TRITONSERVER_TYPE_FP32,
-            detection_masks_shape, 2, detection_masks_bytes,
+            detection_masks_shape, 3, detection_masks_bytes,
             &infos[i].detection_masks_buffer, &infos[i].detection_masks_mem_type,
             &infos[i].detection_masks_mem_type_id));
 
-        GUARDED_RETURN_IF_ERROR(AllocateOutput(
-            infos[i].response, "mask_offsets", TRITONSERVER_TYPE_INT32,
-            mask_offsets_shape, 2, mask_offsets_bytes,
-            &infos[i].mask_offsets_buffer, &infos[i].mask_offsets_mem_type,
-            &infos[i].mask_offsets_mem_type_id));
+        // mask_offsets 已移除 — masks 现在为 [batch, N, slot_size] 格式，每框固定位置 i
 
         GUARDED_RETURN_IF_ERROR(AllocateOutput(
             infos[i].response, "mask_shapes", TRITONSERVER_TYPE_INT32,
@@ -1114,13 +1103,6 @@ TRITONBACKEND_ModelInstanceExecute(
                         info.detection_masks_mem_type,
                         stream));
                 }
-
-                GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
-                    static_cast<int *>(info.mask_offsets_buffer) + b * actual_num_dets,
-                    d_mask_offsets + (offset + b) * max_detections,
-                    actual_num_dets * sizeof(int),
-                    info.mask_offsets_mem_type,
-                    stream));
 
                 GUARDED_RETURN_IF_ERROR(CopyOutputToResponse(
                     static_cast<int *>(info.mask_shapes_buffer) + b * actual_num_dets * 2,

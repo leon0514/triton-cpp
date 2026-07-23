@@ -269,7 +269,6 @@ namespace yolo11_seg_postprocess_backend
         void *scores_buffer = nullptr;
         void *classes_buffer = nullptr;
         void *detection_masks_buffer = nullptr;
-        void *mask_offsets_buffer = nullptr;
         void *mask_shapes_buffer = nullptr;
 
         TRITONSERVER_MemoryType num_dets_mem_type = TRITONSERVER_MEMORY_CPU;
@@ -277,7 +276,6 @@ namespace yolo11_seg_postprocess_backend
         TRITONSERVER_MemoryType scores_mem_type = TRITONSERVER_MEMORY_CPU;
         TRITONSERVER_MemoryType classes_mem_type = TRITONSERVER_MEMORY_CPU;
         TRITONSERVER_MemoryType detection_masks_mem_type = TRITONSERVER_MEMORY_CPU;
-        TRITONSERVER_MemoryType mask_offsets_mem_type = TRITONSERVER_MEMORY_CPU;
         TRITONSERVER_MemoryType mask_shapes_mem_type = TRITONSERVER_MEMORY_CPU;
 
         int64_t num_dets_mem_type_id = 0;
@@ -285,7 +283,6 @@ namespace yolo11_seg_postprocess_backend
         int64_t scores_mem_type_id = 0;
         int64_t classes_mem_type_id = 0;
         int64_t detection_masks_mem_type_id = 0;
-        int64_t mask_offsets_mem_type_id = 0;
         int64_t mask_shapes_mem_type_id = 0;
     };
 
@@ -771,8 +768,6 @@ namespace yolo11_seg_postprocess_backend
                 infos[i].classes_mem_type_id = device_id;
                 infos[i].detection_masks_mem_type = TRITONSERVER_MEMORY_GPU;
                 infos[i].detection_masks_mem_type_id = device_id;
-                infos[i].mask_offsets_mem_type = TRITONSERVER_MEMORY_GPU;
-                infos[i].mask_offsets_mem_type_id = device_id;
                 infos[i].mask_shapes_mem_type = TRITONSERVER_MEMORY_GPU;
                 infos[i].mask_shapes_mem_type_id = device_id;
             }
@@ -921,7 +916,6 @@ namespace yolo11_seg_postprocess_backend
             float *d_scores = postprocessor->scores_gpu();
             int *d_classes = postprocessor->classes_gpu();
             float *d_detection_masks = postprocessor->detection_masks_gpu();
-            int *d_mask_offsets = postprocessor->mask_offsets_gpu();
             int *d_mask_shapes = postprocessor->mask_shapes_gpu();
 
             // 7. 把每个样本的实际 num_dets 拷贝到主机，用于动态输出 shape
@@ -987,9 +981,9 @@ namespace yolo11_seg_postprocess_backend
                 const int64_t boxes_shape[3] = {infos[i].batch_size, actual_num_dets, 4};
                 const int64_t scores_shape[2] = {infos[i].batch_size, actual_num_dets};
                 const int64_t classes_shape[2] = {infos[i].batch_size, actual_num_dets};
-                const int64_t detection_masks_shape[2] = {
-                    infos[i].batch_size, actual_num_dets * kMaskOutputSize * kMaskOutputSize};
-                const int64_t mask_offsets_shape[2] = {infos[i].batch_size, actual_num_dets};
+                const int slot_size = kMaskOutputSize * kMaskOutputSize;
+                const int64_t detection_masks_shape[3] = {
+                    infos[i].batch_size, actual_num_dets, slot_size};
                 const int64_t mask_shapes_shape[3] = {infos[i].batch_size, actual_num_dets, 2};
 
                 const size_t num_dets_bytes = infos[i].batch_size * sizeof(int);
@@ -997,8 +991,7 @@ namespace yolo11_seg_postprocess_backend
                 const size_t scores_bytes = infos[i].batch_size * actual_num_dets * sizeof(float);
                 const size_t classes_bytes = infos[i].batch_size * actual_num_dets * sizeof(int);
                 const size_t detection_masks_bytes = infos[i].batch_size * actual_num_dets *
-                                                     kMaskOutputSize * kMaskOutputSize * sizeof(float);
-                const size_t mask_offsets_bytes = infos[i].batch_size * actual_num_dets * sizeof(int);
+                                                     slot_size * sizeof(float);
                 const size_t mask_shapes_bytes = infos[i].batch_size * actual_num_dets * 2 * sizeof(int);
 
                 GUARDED_RETURN_IF_ERROR(AllocateOutput(
@@ -1027,15 +1020,11 @@ namespace yolo11_seg_postprocess_backend
 
                 GUARDED_RETURN_IF_ERROR(AllocateOutput(
                     infos[i].response, "detection_masks", TRITONSERVER_TYPE_FP32,
-                    detection_masks_shape, 2, detection_masks_bytes,
+                    detection_masks_shape, 3, detection_masks_bytes,
                     &infos[i].detection_masks_buffer, &infos[i].detection_masks_mem_type,
                     &infos[i].detection_masks_mem_type_id));
 
-                GUARDED_RETURN_IF_ERROR(AllocateOutput(
-                    infos[i].response, "mask_offsets", TRITONSERVER_TYPE_INT32,
-                    mask_offsets_shape, 2, mask_offsets_bytes,
-                    &infos[i].mask_offsets_buffer, &infos[i].mask_offsets_mem_type,
-                    &infos[i].mask_offsets_mem_type_id));
+                // mask_offsets 已移除 — masks 现在为 [batch, N, slot_size] 格式
 
                 GUARDED_RETURN_IF_ERROR(AllocateOutput(
                     infos[i].response, "mask_shapes", TRITONSERVER_TYPE_INT32,
@@ -1112,45 +1101,6 @@ namespace yolo11_seg_postprocess_backend
                         info.batch_size,
                         info.mask_shapes_mem_type,
                         stream));
-                }
-
-                // mask_offsets 需要重新计算为相对偏移：每个检测框在 sample 内 mask buffer 中的位置
-                if (actual_num_dets > 0 && info.mask_offsets_buffer != nullptr)
-                {
-                    if (info.mask_offsets_mem_type == TRITONSERVER_MEMORY_CPU)
-                    {
-                        for (int b = 0; b < info.batch_size; ++b)
-                        {
-                            int *dst = static_cast<int *>(info.mask_offsets_buffer) +
-                                       b * actual_num_dets;
-                            for (int d = 0; d < actual_num_dets; ++d)
-                            {
-                                dst[d] = d * kMaskOutputSize * kMaskOutputSize;
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // GPU buffer：通过 cudaMemcpyAsync 从临时 host buffer 拷贝
-                        std::vector<int> host_offsets(info.batch_size * actual_num_dets);
-                        for (int b = 0; b < info.batch_size; ++b)
-                        {
-                            for (int d = 0; d < actual_num_dets; ++d)
-                            {
-                                host_offsets[b * actual_num_dets + d] = d * kMaskOutputSize * kMaskOutputSize;
-                            }
-                        }
-                        cudaError_t merr = cudaMemcpyAsync(
-                            info.mask_offsets_buffer, host_offsets.data(),
-                            host_offsets.size() * sizeof(int),
-                            cudaMemcpyHostToDevice, stream);
-                        if (merr != cudaSuccess)
-                        {
-                            guard.SetError(TRITONSERVER_ErrorNew(
-                                TRITONSERVER_ERROR_INTERNAL, cudaGetErrorString(merr)));
-                            return nullptr;
-                        }
-                    }
                 }
             }
 

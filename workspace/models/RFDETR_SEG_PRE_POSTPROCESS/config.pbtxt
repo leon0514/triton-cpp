@@ -55,19 +55,11 @@ output [
   {
     name: "detection_masks"
     data_type: TYPE_FP32
-    # 1D 拼接的 mask 数据，长度由实际检测数 * 160 * 160 决定
-    dims: [-1]
-  },
-  {
-    name: "mask_offsets"
-    data_type: TYPE_INT32
-    # 每个 mask 在 detection_masks 中的起始偏移
-    dims: [-1]
+    dims: [-1, -1]
   },
   {
     name: "mask_shapes"
     data_type: TYPE_INT32
-    # 每个 mask 的固定形状 [160, 160]
     dims: [-1, 2]
   }
 ]
