@@ -522,12 +522,9 @@ parameters: {
 parameters: {
   key: "num_classes"     value: { string_value: "80" }
 }
-parameters: {
-  key: "slice_width"     value: { string_value: "640" }
-}
-parameters: {
-  key: "slice_height"    value: { string_value: "640" }
-}
+```
+
+> **注意**：切片尺寸（`slice_width`/`slice_height`/`overlap_*`）由 `SAHI_PREPROCESS` 模型控制，ensemble 不再重复配置。修改切片参数请改 `SAHI_PREPROCESS/config.pbtxt`。
 ```
 
 **pose 类型额外输出：**
@@ -612,13 +609,8 @@ parameters: {
 | `num_classes` | int | `80` | 类别数（pose 模式下通常为 `1`） |
 | `num_keypoints` | int | `17` | 关键点数（仅 pose 模式） |
 | `mask_output_resolution` | int | `160` | 分割 mask 输出边长（仅 seg 模式，输出为 N×N） |
-| `slice_width` | int | `640` | SAHI 切片宽度 |
-| `slice_height` | int | `640` | SAHI 切片高度 |
-| `overlap_width_ratio` | float | `0.2` | 切片水平重叠比例 |
-| `overlap_height_ratio` | float | `0.2` | 切片垂直重叠比例 |
-| `max_slices` | int | `64` | 最大切片数（防止异常大图 OOM） |
 
-> **注意**：SAHI ensemble 的 `max_batch_size` 必须为 `0`，输入 dims 为 `[-1, -1, -1, 3]`（带 batch 占位）。`detector_model` 指定的底层模型必须有 `max_batch_size > 0` 以支持分块批量推理。
+> **注意**：SAHI ensemble 的 `max_batch_size` 必须为 `0`。所有切片参数（`slice_width`、`slice_height`、`overlap_*`、`max_slices`、`auto_slice`）均在 `SAHI_PREPROCESS/config.pbtxt` 中配置，ensemble 自动根据实际 slice_num 动态分配工作区。
 
 ### 6. 标签服务配置（`CUSTOM_LABELS/config.pbtxt`）
 

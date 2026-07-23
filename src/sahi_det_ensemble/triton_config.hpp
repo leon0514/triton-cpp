@@ -43,12 +43,7 @@ struct EnsembleConfig
     // Seg 掩码输出尺寸（仅 seg 模式）
     int mask_output_resolution = 160;
 
-    // SAHI 切片配置
-    int slice_width = 640;
-    int slice_height = 640;
-    float overlap_width_ratio = 0.2f;
-    float overlap_height_ratio = 0.2f;
-    int max_slices = 64;
+    // SAHI 切片参数完全由 SAHI_PREPROCESS 控制，ensemble 按实际 slice_num 动态分配
 };
 
 TRITONSERVER_Error *ParseEnsembleConfig(

@@ -43,6 +43,10 @@ parameters: {
   key: "max_slices"
   value: { string_value: "64" }
 }
+parameters: {
+  key: "auto_slice"
+  value: { string_value: "true" }
+}
 
 instance_group [
   {

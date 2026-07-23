@@ -290,37 +290,7 @@ struct InstanceState {
         cudaError_t ce = cudaStreamCreate(&stream);
         if (ce != cudaSuccess) RETURN_TRITON_ERROR(INTERNAL, cudaGetErrorString(ce));
 
-        int max_slices = cfg.max_slices;
-        int max_dets = cfg.max_detections;
-        int max_total = max_slices * max_dets;
-
-        det_num_dets_.gpu(max_slices);
-        det_boxes_.gpu(max_slices * max_dets * cfg.box_dim);
-        det_scores_.gpu(max_slices * max_dets);
-        det_classes_.gpu(max_slices * max_dets);
-
-        filtered_boxes_.gpu(max_total * cfg.box_dim);
-        filtered_scores_.gpu(max_total);
-        filtered_classes_.gpu(max_total);
-        filtered_slice_idx_.gpu(max_total);
-        filtered_count_.gpu(1);
-
-        nms_keep_.gpu(max_total);
-        nms_kept_.gpu(1);
-        nms_offsets_.gpu(cfg.num_classes + 1);
-        nms_counters_.gpu(cfg.num_classes);
-        nms_flags_.gpu(max_total);
-
-        slice_offsets_.gpu(max_slices * 4);
-
-        // Pose keypoints 工作区（可选，分配量小）
-        kpt_workspace_.gpu(max_slices * max_dets * cfg.num_keypoints * 3);
-
-        // Seg masks 工作区（可选，按 chunk_size 分配以节省显存）
-        mask_workspace_.gpu(cfg.chunk_size * cfg.max_detections *
-                           cfg.mask_output_resolution * cfg.mask_output_resolution);
-        mask_shape_workspace_.gpu(cfg.chunk_size * max_dets * 2);
-
+        // 工作区由首次请求时按实际 slice_num 动态分配（Memory::gpu 自动扩容）
         return nullptr;
     }
 };
@@ -535,15 +505,35 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
 
         int slice_num = (off_shape.size() >= 1) ? static_cast<int>(off_shape[0]) : 0;
 
-        // ---- 【安全边界】slice_num > max_slices 防御 ----
-        if (slice_num > cfg.max_slices) {
-            TRITONSERVER_InferenceResponseDelete(sahi_resp);
-            auto *bound_err = TRITONSERVER_ErrorNew(TRITONSERVER_ERROR_INVALID_ARG,
-                "slice_num exceeds max_slices, increase max_slices in config.pbtxt");
-            TRITONBACKEND_ResponseSend(info.resp, TRITONSERVER_RESPONSE_COMPLETE_FINAL, bound_err);
-            info.resp = nullptr;
-            TRITONSERVER_ErrorDelete(bound_err);
-            continue;
+        // 按实际 slice_num 动态分配工作区（Memory::gpu 仅在容量不足时扩容，首次分配后复用）
+        int max_dets = cfg.max_detections;
+        int max_total = slice_num * max_dets;
+
+        is->det_num_dets_.gpu(slice_num);
+        is->det_boxes_.gpu(slice_num * max_dets * cfg.box_dim);
+        is->det_scores_.gpu(slice_num * max_dets);
+        is->det_classes_.gpu(slice_num * max_dets);
+
+        is->filtered_boxes_.gpu(max_total * cfg.box_dim);
+        is->filtered_scores_.gpu(max_total);
+        is->filtered_classes_.gpu(max_total);
+        is->filtered_slice_idx_.gpu(max_total);
+        is->filtered_count_.gpu(1);
+
+        is->nms_keep_.gpu(max_total);
+        is->nms_kept_.gpu(1);
+        is->nms_offsets_.gpu(cfg.num_classes + 1);
+        is->nms_counters_.gpu(cfg.num_classes);
+        is->nms_flags_.gpu(max_total);
+
+        is->slice_offsets_.gpu(slice_num * 4);
+
+        if (cfg.output_type == OutputType::POSE)
+            is->kpt_workspace_.gpu(slice_num * max_dets * cfg.num_keypoints * 3);
+        if (cfg.output_type == OutputType::SEG) {
+            is->mask_workspace_.gpu(cfg.chunk_size * max_dets *
+                                   cfg.mask_output_resolution * cfg.mask_output_resolution);
+            is->mask_shape_workspace_.gpu(cfg.chunk_size * max_dets * 2);
         }
 
         info.d_sliced = const_cast<uint8_t *>(static_cast<const uint8_t *>(sliced_buf));
@@ -551,10 +541,12 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
         info.slice_num = slice_num;
         info.sahi_resp = sahi_resp;  // 【保活】在 CompletionQueue 中释放
 
-        // ---- 2c. 分块调用检测模型 ----
-        // 【修改】不再在循环内释放 det_resp 或做同步；
-        //        将 det_resp 保活到 info.det_resps，由 CompletionQueue 统一清理。
-        size_t slice_px = static_cast<size_t>(cfg.slice_width) * cfg.slice_height * 3;
+        // ---- 2c. 从 preprocess 输出读取实际 slice 尺寸 ----
+        int actual_slice_h = static_cast<int>(sliced_shape[1]);
+        int actual_slice_w = static_cast<int>(sliced_shape[2]);
+        size_t slice_px = static_cast<size_t>(actual_slice_h) * actual_slice_w * 3;
+
+        // ---- 2d. 分块调用检测模型 ----
         bool det_ok = true;
 
         for (int s = 0; s < slice_num; s += cfg.chunk_size) {
@@ -566,7 +558,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                 &det_req, server, cfg.detector_model.c_str(), -1);
 
             if (!err) {
-                const int64_t det_sh[4] = {n, cfg.slice_height, cfg.slice_width, 3};
+                const int64_t det_sh[4] = {n, actual_slice_h, actual_slice_w, 3};
                 size_t det_bytes = static_cast<size_t>(n) * slice_px;
                 err = TRITONSERVER_InferenceRequestAddInput(
                     det_req, "raw_image", TRITONSERVER_TYPE_UINT8, det_sh, 4);
@@ -734,8 +726,7 @@ TRITONSERVER_Error *TRITONBACKEND_ModelInstanceExecute(
                         slice_num * 4 * sizeof(int), cudaMemcpyDeviceToDevice, stream);
 
         // ---- 2e. filter_and_offset（一体化 CUDA kernel） ----
-        int max_total = slice_num * cfg.max_detections;
-        // ---- 2e. filter_and_offset（一体化 CUDA kernel） ----
+        // (max_total 已在上方动态分配时声明)
         sahi_det_ensemble::filter_and_offset(
             is->det_num_dets_.gpu(), is->det_boxes_.gpu(),
             is->det_scores_.gpu(), is->det_classes_.gpu(),

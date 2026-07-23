@@ -5,10 +5,10 @@
 
 #include "sahi_preprocess/slice_impl.hpp"
 #include "common/check.hpp"
+#include "common/logging.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 
 namespace sahi
 {
@@ -171,24 +171,57 @@ const SliceResult &SliceImage::slice(
     float overlap_width_ratio = config_.overlap_width_ratio;
     float overlap_height_ratio = config_.overlap_height_ratio;
 
+    if (config_.auto_slice)
+    {
+        std::tie(slice_width, slice_height, overlap_width_ratio, overlap_height_ratio) =
+            get_auto_slice_params(width, height);
+        LOG_INFO("[sahi_preprocess] auto_slice: computed slice=%dx%d overlap=%.2f/%.2f",
+                slice_width, slice_height, overlap_width_ratio, overlap_height_ratio);
+    }
+
     int slice_num_h = calculateNumCuts(width, slice_width, overlap_width_ratio);
     int slice_num_v = calculateNumCuts(height, slice_height, overlap_height_ratio);
     int slice_num = slice_num_h * slice_num_v;
 
     if (slice_num > config_.max_slices)
     {
-        fprintf(stderr,
-            "[sahi_preprocess] warning: computed slice_num (%d) exceeds max_slices (%d), "
-            "consider increasing max_slices\n",
-            slice_num, config_.max_slices);
+        LOG_WARN("[sahi_preprocess] slice_num (%d) exceeds max_slices (%d), scaling up slice size",
+                slice_num, config_.max_slices);
+
+        // 按比例放大 slice 尺寸以减小切片数，直到 <= max_slices
+        float scale = 1.0f;
+        while (slice_num > config_.max_slices && scale < 10.0f)
+        {
+            scale += 0.5f;
+            int sw = static_cast<int>(slice_width * scale);
+            int sh = static_cast<int>(slice_height * scale);
+            if (sw >= width && sh >= height)
+            {
+                // 整张图已经能放进单个切片
+                slice_width = width;
+                slice_height = height;
+                overlap_width_ratio = 0.0f;
+                overlap_height_ratio = 0.0f;
+                slice_num_h = 1;
+                slice_num_v = 1;
+                slice_num = 1;
+                break;
+            }
+            slice_num_h = calculateNumCuts(width, sw, overlap_width_ratio);
+            slice_num_v = calculateNumCuts(height, sh, overlap_height_ratio);
+            slice_num = slice_num_h * slice_num_v;
+            slice_width = sw;
+            slice_height = sh;
+        }
+
+        LOG_INFO("[sahi_preprocess] adjusted: slice=%dx%d slice_num=%d",
+                slice_width, slice_height, slice_num);
     }
 
-    printf("[sahi_preprocess] slice_width=%d slice_height=%d "
-           "overlap_width_ratio=%f overlap_height_ratio=%f "
-           "slice_num_h=%d slice_num_v=%d slice_num=%d\n",
-           slice_width, slice_height,
-           overlap_width_ratio, overlap_height_ratio,
-           slice_num_h, slice_num_v, slice_num);
+    LOG_INFO("[sahi_preprocess] slice=%dx%d overlap=%.2f/%.2f slices=%dx%d=%d",
+             slice_width, slice_height,
+             overlap_width_ratio, overlap_height_ratio,
+             slice_num_h, slice_num_v, slice_num);
 
     size_t output_img_size = 3ULL * slice_width * slice_height;
     size_t total_output_bytes = slice_num * output_img_size;

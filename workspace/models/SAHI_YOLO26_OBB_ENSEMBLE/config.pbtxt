@@ -45,10 +45,5 @@ parameters: {
   key: "num_classes"
   value: { string_value: "15" }
 }
-parameters: {
-  key: "slice_width"
-  value: { string_value: "640" }
-}
-parameters: {  key: "slice_height"
   value: { string_value: "640" }
 }

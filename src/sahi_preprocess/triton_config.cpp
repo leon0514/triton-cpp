@@ -86,9 +86,19 @@ TRITONSERVER_Error *ParseSahiConfig(
             config.max_slices = std::stoi(max_slices);
         }
 
-        if (config.slice_width <= 0 || config.slice_height <= 0)
+        std::string auto_slice = GetStringParameter(parameters, "auto_slice");
+        if (!auto_slice.empty())
         {
-            RETURN_TRITON_ERROR(INVALID_ARG, "slice_width and slice_height must be positive");
+            config.auto_slice = (auto_slice == "true" || auto_slice == "1");
+        }
+
+        // auto_slice 模式下 slice_width/height 由图像分辨率自动确定
+        if (!config.auto_slice)
+        {
+            if (config.slice_width <= 0 || config.slice_height <= 0)
+            {
+                RETURN_TRITON_ERROR(INVALID_ARG, "slice_width and slice_height must be positive");
+            }
         }
         if (config.max_slices <= 0)
         {

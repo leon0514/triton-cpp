@@ -102,26 +102,7 @@ TRITONSERVER_Error *ParseEnsembleConfig(
         if (!mask_sz.empty())
             config.mask_output_resolution = std::stoi(mask_sz);
 
-        // SAHI 切片参数
-        std::string sw = GetStringParameter(parameters, "slice_width");
-        if (!sw.empty())
-            config.slice_width = std::stoi(sw);
-
-        std::string sh = GetStringParameter(parameters, "slice_height");
-        if (!sh.empty())
-            config.slice_height = std::stoi(sh);
-
-        std::string ow = GetStringParameter(parameters, "overlap_width_ratio");
-        if (!ow.empty())
-            config.overlap_width_ratio = std::stof(ow);
-
-        std::string oh = GetStringParameter(parameters, "overlap_height_ratio");
-        if (!oh.empty())
-            config.overlap_height_ratio = std::stof(oh);
-
-        std::string ms = GetStringParameter(parameters, "max_slices");
-        if (!ms.empty())
-            config.max_slices = std::stoi(ms);
+        // SAHI 切片参数完全由 SAHI_PREPROCESS 控制，ensemble 无需配置
 
         // 安全检查
         if (config.confidence_threshold < 0.0f || config.confidence_threshold > 1.0f)

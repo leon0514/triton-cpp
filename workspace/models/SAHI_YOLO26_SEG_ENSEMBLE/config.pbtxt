@@ -51,26 +51,6 @@ parameters: {
   key: "mask_output_resolution"
   value: { string_value: "160" }
 }
-parameters: {
-  key: "slice_width"
-  value: { string_value: "640" }
-}
-parameters: {
-  key: "slice_height"
-  value: { string_value: "640" }
-}
-parameters: {
-  key: "overlap_width_ratio"
-  value: { string_value: "0.2" }
-}
-parameters: {
-  key: "overlap_height_ratio"
-  value: { string_value: "0.2" }
-}
-parameters: {
-  key: "max_slices"
-  value: { string_value: "64" }
-}
 
 instance_group [
   {

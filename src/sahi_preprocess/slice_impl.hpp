@@ -38,6 +38,10 @@ struct SliceImageConfig
 
     // 预分配最大切片数量，避免频繁重新分配 workspace
     int max_slices = 64;
+
+    // 启用自动切片：根据图像分辨率自动确定 slice_width/slice_height/overlap
+    // 启用后，手动设置的 slice_width/slice_height 将被忽略
+    bool auto_slice = false;
 };
 
 // 切片结果描述
